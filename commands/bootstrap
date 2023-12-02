@@ -3,7 +3,10 @@ set -e
 DEVICE_ID=
 TARGET=
 OPEN_WEBSITE=1
-WEBSITE_PAGE=device-info
+WEBSITE_PAGE="device-info"
+SSH_USER=
+SCAN=${SCAN:-0}
+PATTERN="${PATTERN:-.+}"
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -26,9 +29,11 @@ ARGUMENTS
                       has not already been bootstrapped.
 
 FLAGS
-  --skip-website    Don't open the Cumulocity IoT Device Management application
-  --page <STRING>   Which Device Management page to open. Defaults to device-info
-  -h, --help        Show this help
+  --skip-website      Don't open the Cumulocity IoT Device Management application
+  --page <STRING>     Which Device Management page to open. Defaults to device-info
+  --scan              Bootstrap devices found by a scan
+  --pattern <REGEX>   Only include devices which match the given pattern (only applies when piping or scanning devices)
+  -h, --help          Show this help
 
 $EXAMPLES
 
@@ -44,6 +49,9 @@ c8y tedge bootstrap root@mydevice.local
 
 # Bootstrap a device via ssh but don't open the website
 c8y tedge bootstrap root@mydevice.local --skip-website
+
+# Bootstrap any devices found during a scan
+c8y tedge bootstrap --ssh-user root --scan --pattern "rpi3"
 
 EOT
 }
@@ -69,6 +77,17 @@ while [ $# -gt 0 ]; do
             DEVICE_ID="$2"
             shift
             ;;
+        --scan)
+            SCAN=1
+            ;;
+        --pattern)
+            PATTERN="$2"
+            shift
+            ;;
+        --ssh-user)
+            SSH_USER="$2"
+            shift
+            ;;
         --skip-website)
             OPEN_WEBSITE=0
             ;;
@@ -82,62 +101,100 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-
-# TODO: Check if the device is already connected or not, otherwise this command will fail if the url is already set.
-# shellcheck disable=SC2029
-ssh "$TARGET" tedge config set c8y.url "$C8Y_DOMAIN"
-
-# Create the device certificate, ignore any errors as this could have already happened
-# Generally the device cert should not be deleted, so just fail silently for now
-if [ -n "$DEVICE_ID" ]; then
-    # Use the user given device-id
-    ssh "$TARGET" tedge cert create --device-id "$DEVICE_ID" 2>/dev/null ||:
-else
-    # Default to the hostname of the device
-    ssh "$TARGET" tedge cert create --device-id '$HOSTNAME' 2>/dev/null ||:
-fi
-
-# Get public cert
-PUBLIC_CERT=$(ssh "$TARGET" "cat \$(tedge config get device.cert_path)")
-
-if [ -z "$DEVICE_ID" ]; then
-    DEVICE_ID=$(ssh "$TARGET" "tedge config get device.id")
-fi
-
-echo "Certificate CN: $DEVICE_ID" >&2
-c8y devicemanagement certificates create \
-    --name "$DEVICE_ID" \
-    --autoRegistrationEnabled \
-    --status ENABLED \
-    --file <(echo "$PUBLIC_CERT") \
-    --silentExit --silentStatusCodes 409 "$@"
-
-
-# Wait for certificate to be enabled
-if ! ssh "$TARGET" tedge connect c8y --test >/dev/null 2>&1; then
-    sleep 2
-
-    attempt=0
-    max_attempts=10
-    success=0
-    while [ "$attempt" -lt "$max_attempts" ]; do
-        if ssh "$TARGET" tedge connect c8y; then
-            success=1
-            break
-        fi
-
-        echo "Connection failed. Trying again in 5 seconds" >&2
-        sleep 5
-    done
-
-    if [ "$success" = "1" ]; then
-        echo "Successfully bootstrapped device" >&2
-    else
-        echo "Bootstrapping failed. Please check the console output for more details" >&2
+do_action() {
+    if [ $# -gt 0 ]; then
+        TARGET="$1"
     fi
+    if [ -n "$SSH_USER" ]; then
+        TARGET="$SSH_USER@$TARGET"
+    fi
+
+    # TODO: Check if the device is already connected or not, otherwise this command will fail if the url is already set.
+    # shellcheck disable=SC2029
+    ssh -n "$TARGET" tedge config set c8y.url "$C8Y_DOMAIN"
+
+    # Create the device certificate, ignore any errors as this could have already happened
+    # Generally the device cert should not be deleted, so just fail silently for now
+    if [ -n "$DEVICE_ID" ]; then
+        # Use the user given device-id
+        ssh -n "$TARGET" tedge cert create --device-id "$DEVICE_ID" 2>/dev/null ||:
+    else
+        # Default to the hostname of the device
+        ssh -n "$TARGET" tedge cert create --device-id '$HOSTNAME' 2>/dev/null ||:
+    fi
+
+    # Get public cert
+    PUBLIC_CERT=$(ssh "$TARGET" "cat \$(tedge config get device.cert_path)")
+
+    if [ -z "$DEVICE_ID" ]; then
+        DEVICE_ID=$(ssh -n "$TARGET" "tedge config get device.id")
+    fi
+
+    echo "Certificate CN: $DEVICE_ID" >&2
+    c8y devicemanagement certificates create \
+        -n \
+        --name "$DEVICE_ID" \
+        --autoRegistrationEnabled \
+        --status ENABLED \
+        --file <(echo "$PUBLIC_CERT") \
+        --silentExit --silentStatusCodes 409
+
+    # Wait for certificate to be enabled
+    if ! ssh -n "$TARGET" tedge connect c8y --test >/dev/null 2>&1; then
+        sleep 2
+
+        attempt=0
+        max_attempts=10
+        success=0
+        while [ "$attempt" -lt "$max_attempts" ]; do
+            if ssh -n "$TARGET" tedge connect c8y; then
+                success=1
+                break
+            fi
+
+            echo "Connection failed. Trying again in 5 seconds" >&2
+            sleep 5
+        done
+
+        if [ "$success" = "1" ]; then
+            echo "Successfully bootstrapped device" >&2
+        else
+            echo "Bootstrapping failed. Please check the console output for more details" >&2
+        fi
+    fi
+
+    # Open device management page for the device
+    if [ "$OPEN_WEBSITE" = 1 ]; then
+        c8y identity get -n --name "$DEVICE_ID" | c8y applications open --application devicemanagement --page "$WEBSITE_PAGE"
+    fi
+}
+
+
+DEVICES=()
+
+if [ ! -t 0 ]; then
+    echo "Reading from pipeline" >&2
+    while IFS= read -r device; do
+        if [ -n "$device" ] && [[ "${device}" =~ $PATTERN ]]; then
+            DEVICES+=("$device")
+        fi
+    done < <(cat -)
+elif [ "$SCAN" = 1 ]; then
+    echo "Scanning for devices" >&2
+    while read -r device; do
+        if [ -n "$device" ] && [[ "${device}" =~ $PATTERN ]]; then
+            DEVICES+=("$device")
+        fi
+    done < <(c8y tedge scan --timeout 2)
+else
+    echo "Using user provided device" >&2
+    DEVICES+=("$TARGET")
 fi
 
-# Open device management page for the device
-if [ "$OPEN_WEBSITE" = 1 ]; then
-    c8y identity get --name "$DEVICE_ID" | c8y applications open --application devicemanagement --page "$WEBSITE_PAGE"
+if [ "${#DEVICES[@]}" -gt 0 ]; then
+    echo "Found ${#DEVICES[@]} devices" >&2
 fi
+
+for device in "${DEVICES[@]}"; do
+    do_action "$device"
+done
