@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -e
+TIMEOUT=2
+PATTERN=
+
+usage() {
+    EXAMPLES=$(examples 2>&1)
+    cat << EOT >&2
+Scan for local thin-edge.io device which have an Avahi service definition (mdns-sd)
+The devices must be reachable via ssh on the local network.
+
+USAGE
+  c8y tedge scan <TIMEOUT>
+
+ARGUMENTS
+  TIMEOUT             Duration to wait for in seconds. Defaults to 2
+
+FLAGS
+  --page <STRING>   Which Device Management page to open. Defaults to device-info
+  -h, --help        Show this help
+
+$EXAMPLES
+
+EOT
+}
+
+examples() {
+    cat << EOT >&2
+EXAMPLES
+
+# Scan for local thin-edge.io devices on the local network
+c8y tedge scan
+
+# Scan for local thin-edge.io that start with rpi3
+c8y tedge scan --pattern "rpi3"
+
+EOT
+}
+
+#
+# Parse args
+#
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --examples)
+            examples
+            exit 0
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --pattern)
+            PATTERN="$2"
+            shift
+            ;;
+        *)
+            if [ -z "$TIMEOUT" ]; then
+                TIMEOUT="${1:-2}"
+            fi
+            ;;
+    esac
+    shift
+done
+
+SD_SERVICE_TYPE=_thin-edge_mqtt._tcp
+
+if command -V dns-sd >/dev/null 2>&1; then
+    OUTPUT=$(dns-sd -t "$TIMEOUT" -B "$SD_SERVICE_TYPE" local)
+elif command -V avahi-browse >/dev/null 2>&1; then
+    OUTPUT=$(avahi-browse -d local "$SD_SERVICE_TYPE" -t)
+else
+    echo "Missing dependency. Scanning for thin-edge.io devices requires either avahi-browse or dns-sd to be installed" >&2
+    exit 1
+fi
+
+DEVICES=$(echo "$OUTPUT" | grep -o "thin-edge.io ([a-zA-Z0-9-]*)" | cut -d' ' -f2- | tr -d '()' | sort | uniq)
+
+if [ -n "$PATTERN" ]; then
+    echo "$DEVICES" | grep "$PATTERN"
+else
+    echo "$DEVICES"
+fi
