@@ -1,0 +1,48 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/reubenmiller/go-c8y-cli/feat/extensions-manager/tools/schema/extensionCommands.json
+---
+version: v1
+group:
+  name: devices
+  description: thin-edge.io devices
+
+commands:
+  - name: list
+    description: Get a collection of thin-edge.io devices
+    method: GET
+    path: inventory/managedObjects
+    queryParameters:
+      - name: query
+        property: q
+        type: queryExpression
+        description: Query expression
+        children:
+          - name: staticFragment
+            type: stringStatic
+            description: ""
+            hidden: true
+            value: "c8y_Agent.name eq 'thin-edge.io'"
+
+          - name: name
+            type: string
+            description: Filter by name
+            format: (name eq '%s')
+
+          - name: type
+            type: string
+            description: Filter by type
+            format: (type eq '%s')
+
+          - name: version
+            type: string
+            description: Filter by agent version
+            format: (c8y_Agent.version eq '%s')
+
+          - name: query
+            type: string
+            description: Filter by custom query
+            format: '%s'
+
+          - name: orderBy
+            type: string
+            default: name
+            description: Order by. e.g. _id asc or name asc or creationTime.date desc
