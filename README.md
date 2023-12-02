@@ -1,0 +1,39 @@
+# c8y-tedge
+
+[go-c8y-cli](https://goc8ycli.netlify.app/) extension to add some useful command to help manage thin-edge.io with Cumulocity IoT.
+
+## What is included?
+
+**Note**
+
+Use ✅ or 🔲 indicates if the extension includes the given functionality or not.
+
+
+|Type|Included|Notes|
+|----|:-:|-----|
+|Commands|✅|Commands to manage thin-edge.io devices|
+|Views|✅| device and event views|
+
+## Install
+
+The extension can be installed using the following command.
+
+```sh
+c8y extension install thin-edge/c8y-tedge
+```
+
+## Examples
+
+### Bootstrap device via ssh
+
+Bootstrap a thin-edge.io enable device using SSH.
+
+```sh
+c8y tedge bootstrap root@raspberrypi3-64.local
+```
+
+The bootstrapping processes does:
+
+* Create the device certificate (if required)
+* Fetch public device certificate and upload it to Cumulocity IoT (private key does not leave the device)
+* Open the device in the Cumulocity IoT Device Management application

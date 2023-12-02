@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+set -e
+DEVICE_ID=
+TARGET=
+OPEN_WEBSITE=1
+WEBSITE_PAGE=device-info
+
+usage() {
+    EXAMPLES=$(examples 2>&1)
+    cat << EOT >&2
+Bootstrap a thin-edge.io device using ssh.
+The device must be reachable via ssh on the local network.
+
+The bootstrapping processes does:
+
+* Create the device certificate (if required)
+* Fetch public device certificate and upload it to Cumulocity IoT (private key does not leave the device)
+* Open the device in the Cumulocity IoT Device Management application
+
+USAGE
+  c8y tedge bootstrap <TARGET> [DEVICE_ID]
+
+ARGUMENTS
+  TARGET              Device hostname or ip to connect to via ssh. E.g. root@mydevice.local
+  DEVICE_ID           Device id to be assigned to the device. This will only be used if the device
+                      has not already been bootstrapped.
+
+FLAGS
+  --skip-website    Don't open the Cumulocity IoT Device Management application
+  --page <STRING>   Which Device Management page to open. Defaults to device-info
+  -h, --help        Show this help
+
+$EXAMPLES
+
+EOT
+}
+
+examples() {
+    cat << EOT >&2
+EXAMPLES
+
+# Bootstrap a device via ssh
+c8y tedge bootstrap root@mydevice.local
+
+# Bootstrap a device via ssh but don't open the website
+c8y tedge bootstrap root@mydevice.local --skip-website
+
+EOT
+}
+
+#
+# Parse args
+#
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --examples)
+            examples
+            exit 0
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --page)
+            WEBSITE_PAGE="$2"
+            shift
+            ;;
+        --device-id)
+            DEVICE_ID="$2"
+            shift
+            ;;
+        --skip-website)
+            OPEN_WEBSITE=0
+            ;;
+        *)
+            if [ -z "$TARGET" ]; then
+                TARGET="$1"
+            elif [ -z "$DEVICE_ID" ]; then
+                DEVICE_ID="$1"
+            fi
+    esac
+    shift
+done
+
+
+# TODO: Check if the device is already connected or not, otherwise this command will fail if the url is already set.
+# shellcheck disable=SC2029
+ssh "$TARGET" tedge config set c8y.url "$C8Y_DOMAIN"
+
+# Create the device certificate, ignore any errors as this could have already happened
+# Generally the device cert should not be deleted, so just fail silently for now
+if [ -n "$DEVICE_ID" ]; then
+    # Use the user given device-id
+    ssh "$TARGET" tedge cert create --device-id "$DEVICE_ID" 2>/dev/null ||:
+else
+    # Default to the hostname of the device
+    ssh "$TARGET" tedge cert create --device-id '$HOSTNAME' 2>/dev/null ||:
+fi
+
+# Get public cert
+PUBLIC_CERT=$(ssh "$TARGET" "cat \$(tedge config get device.cert_path)")
+
+if [ -z "$DEVICE_ID" ]; then
+    DEVICE_ID=$(ssh "$TARGET" "tedge config get device.id")
+fi
+
+echo "Certificate CN: $DEVICE_ID" >&2
+c8y devicemanagement certificates create \
+    --name "$DEVICE_ID" \
+    --autoRegistrationEnabled \
+    --status ENABLED \
+    --file <(echo "$PUBLIC_CERT") \
+    --silentExit --silentStatusCodes 409 "$@"
+
+
+# Wait for certificate to be enabled
+if ! ssh "$TARGET" tedge connect c8y --test >/dev/null 2>&1; then
+    sleep 2
+
+    attempt=0
+    max_attempts=10
+    success=0
+    while [ "$attempt" -lt "$max_attempts" ]; do
+        if ssh "$TARGET" tedge connect c8y; then
+            success=1
+            break
+        fi
+
+        echo "Connection failed. Trying again in 5 seconds" >&2
+        sleep 5
+    done
+
+    if [ "$success" = "1" ]; then
+        echo "Successfully bootstrapped device" >&2
+    else
+        echo "Bootstrapping failed. Please check the console output for more details" >&2
+    fi
+fi
+
+# Open device management page for the device
+if [ "$OPEN_WEBSITE" = 1 ]; then
+    c8y identity get --name "$DEVICE_ID" | c8y applications open --application devicemanagement --page "$WEBSITE_PAGE"
+fi

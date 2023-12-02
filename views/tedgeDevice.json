@@ -1,0 +1,18 @@
+{
+    "$schema": "https://raw.githubusercontent.com/reubenmiller/go-c8y-cli/feat/extensions-manager/tools/schema/views.json",
+    "version": "v1",
+    "definitions": [
+        {
+            "name": "tedgeDevice",
+            "priority": 300,
+            "fragments": ["c8y_IsDevice"],
+            "type": "thin-edge.io",
+            "columns": [
+                "id",
+                "name",
+                "c8y_Agent.version",
+                "c8y_Hardware.model"
+            ]
+        }
+    ]
+}
