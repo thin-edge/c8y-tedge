@@ -12,7 +12,7 @@ Use ✅ or 🔲 indicates if the extension includes the given functionality or n
 |Type|Included|Notes|
 |----|:-:|-----|
 |Commands|✅|Commands to manage thin-edge.io devices|
-|Views|✅| device and event views|
+|Views|✅|thin-edge.io specific views|
 
 ## Install
 
