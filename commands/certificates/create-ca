@@ -1,0 +1,46 @@
+#!/bin/bash
+
+create-device-cert() {
+    name="$1"
+    cert_only="$2"
+
+    KEY_FILE="${name}-key.pem"
+    CRT_FILE="${name}.pem"
+    mkcert -client -ecdsa -cert-file "$CRT_FILE" --key-file "$KEY_FILE" "$name"
+    cat "$(mkcert -CAROOT)/rootCA.pem" >> "$CRT_FILE"
+
+    # mkcert -client -ecdsa "$1"
+    # cat "$name".pem > "$name"-fullchain.pem
+
+    CA_PEM="$(mkcert -CAROOT)/rootCA.pem"
+    CA_KEY="$(mkcert -CAROOT)/rootCA-key.pem"
+
+    cat "$(mkcert -CAROOT)/rootCA.pem" >> "$name"-fullchain.pem
+
+    if [ "$cert_only" = "true" ]; then
+        echo "public cert: $CRT_FILE"
+        echo "private cert: $KEY_FILE"
+        return
+    fi
+
+    CA_NAME="local-dev-$USER"
+
+    c8y devicemanagement certificates create -n --autoRegistrationEnabled --name "$CA_NAME" --file "$CA_PEM" --silentExit --silentStatusCodes "409"
+    CA_FINGERPRINT=$(openssl x509 -in "$CA_PEM" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+    echo "fingerprint: $CA_FINGERPRINT"
+
+    POSESSION_CODE=$(
+        c8y devicemanagement certificates get -n --id "$CA_FINGERPRINT" --select proofOfPossessionUnsignedVerificationCode --output csv
+    )
+    echo "Possession verification code: $POSESSION_CODE"
+
+    # Generate verification code
+    VERIFICATION_CODE=$(echo "$POSESSION_CODE" | openssl dgst -sha256 -sign "$CA_KEY" | openssl base64 -A)
+    echo "Response verification code: $VERIFICATION_CODE"
+
+    # Send proof of possession verification
+    TENANT=$(c8y currenttenant get --select name -o csv)
+    c8y api POST "tenant/tenants/$TENANT/trusted-certificates-pop/$CA_FINGERPRINT/pop" --template "{proofOfPossessionSignedVerificationCode: '$VERIFICATION_CODE'}"
+}
+
+create-device-cert "$@"

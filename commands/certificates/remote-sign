@@ -1,0 +1,148 @@
+#!/bin/bash
+#
+# References:
+# https://gist.github.com/fntlnz/cf14feb5a46b2eda428e000157447309
+#
+set -e
+
+usage() {
+    echo "
+
+EXAMPLES
+    c8y tedge certificates remote-sign raspberrypi --device rmi_raspberrypi3
+    # 
+
+    "
+}
+
+# Must be called with root
+
+error () {
+    echo "ERROR: $*"
+}
+
+SSH_HOST="$1"
+C8Y_BASEURL="${C8Y_BASEURL:-}"
+DEVICE_ID="${DEVICE_ID:-}"
+
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --device)
+            DEVICE_ID="$2"
+            shift
+            ;;
+
+        --c8y-url)
+            C8Y_BASEURL="$2"
+            shift
+            ;;
+
+        --host)
+            SSH_HOST="$2"
+            shift
+            ;;
+    esac
+    shift
+done
+
+# DEVICE_ID=$(ssh "$SSH_HOST" "tedge config get device.id")
+
+if [ -z "$DEVICE_ID" ]; then
+    DEVICE_ID="${SSH_HOST}"
+fi
+
+if [ -z "$C8Y_BASEURL" ]; then
+    error "c8y.url was not provided"
+    exit 1
+fi
+
+create_csr_remote() {
+    CSR_OUTPUT_PATH="$1"
+    COMMON_NAME="$2"
+
+    c8y_url=$(echo "$C8Y_BASEURL" | sed -E 's|https?://||g')
+
+    CSR_CONTENTS=$(ssh "$SSH_HOST" "
+KEY_PATH=\$(tedge config get device.key.path)
+if [ ! -f \"\$KEY_PATH\" ]; then
+    sudo openssl genrsa -out \"\$KEY_PATH\" 4096
+    sudo chown mosquitto:mosquitto \"\$KEY_PATH\"
+fi
+TMP_DIR=\$(mktemp -d -t local-device-csrXXXX)
+TMP_CSR=\"\$TMP_DIR/device.csr\"
+
+sudo openssl req -new -sha256 -key \"\$KEY_PATH\" -subj \"/CN=$COMMON_NAME/O=Thin Edge/OU=Test Device\" -out \"\$TMP_CSR\"
+
+echo \"--- CSR START ---\"
+cat \"\$TMP_CSR\"
+rm -rf \"\$TMP_DIR\"
+")
+
+    echo "$CSR_CONTENTS" | grep -e "--- CSR START ---" -A 100 | tail -n+2 > "$CSR_OUTPUT_PATH"
+}
+
+copy_pem_remote() {
+    pem_contents="$(base64 < "$1")"
+    ssh "$SSH_HOST" "
+EXISTING_URL=\$(tedge config get c8y.url)
+if [ \"\$EXISTING_URL\" != \"$c8y_url\" ]; then
+    echo \"Updating tedge c8y.url from '\$EXISTING_URL' to '$c8y_url'\"
+    sudo tedge disconnect c8y
+    sudo tedge config set c8y.url \"$c8y_url\"
+fi
+
+PEM_PATH=\$(tedge config get device.cert.path)
+
+echo -e '$pem_contents' | base64 --decode | sudo tee \"\$PEM_PATH\"
+sudo chown mosquitto:mosquitto \"\$PEM_PATH\"
+
+#sudo tedge disconnect c8y
+sudo tedge reconnect c8y
+
+echo 'Restarting other plugins'
+sudo systemctl restart c8y-configuration-plugin c8y-log-plugin c8y-firmware-plugin
+"
+}
+
+
+CA_ROOT="$(mkcert -CAROOT)"
+ROOT_CA_PEM="$CA_ROOT/rootCA.pem"
+ROOT_CA_KEY="$CA_ROOT/rootCA-key.pem"
+DURATION="${DURATION:-365}"
+
+#
+# Create CSR from device
+#
+TMP_PEM="${DEVICE_ID}.pem"
+TMP_CSR="${DEVICE_ID}.csr"
+create_csr_remote "$TMP_CSR" "$DEVICE_ID"
+
+#
+# Sign CSR
+#
+# upload ca cert
+echo "Root CA: fingerprint"
+c8y devicemanagement certificates create -n --autoRegistrationEnabled --name "rootCA" --file "$ROOT_CA_PEM" --silentExit --silentStatusCodes "409"
+# openssl x509 -in "$ROOT_CA_PEM" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]'
+if [ -z "$ROOT_CA_PEM" ] || [ -z "$ROOT_CA_KEY" ]; then
+    echo "Creating Root CA"
+fi
+openssl x509 -req -in "$TMP_CSR" -CA "$ROOT_CA_PEM" -CAkey "$ROOT_CA_KEY" -CAcreateserial -out "$TMP_PEM" -days "$DURATION" -sha256
+# add rootca to device pem (full cert chain)
+cat "$ROOT_CA_PEM" >> "$TMP_PEM"
+
+if [ ! -f "$TMP_PEM" ]; then
+    echo "ERROR: No certificate file was returned. Something went wrong."
+    exit 1
+fi
+
+#
+# Copy back to device
+#
+copy_pem_remote "$TMP_PEM"
+
+#
+# Cleanup
+#
+rm -f "$TMP_CSR" "$TMP_PEM"

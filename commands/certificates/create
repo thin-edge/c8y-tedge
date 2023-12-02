@@ -1,0 +1,53 @@
+#!/bin/bash
+
+create-device-cert() {
+
+    # https://gist.github.com/fntlnz/cf14feb5a46b2eda428e000157447309
+    
+    name="$1"
+    KEY_FILE="$name-key.pem"
+    CRT_FILE="$name.pem"
+    mkcert -client -ecdsa -cert-file "$CRT_FILE" --key-file "$KEY_FILE" "$name"
+    cat "$(mkcert -CAROOT)/rootCA.pem" >> "$CRT_FILE"
+
+    echo "public cert: $CRT_FILE"
+    echo "private cert: $KEY_FILE"
+
+
+    scp "$KEY_FILE" raspberrypi:/etc/tedge/device-certs/tedge-private-key.pem
+
+    scp raspberrypi:~/tedge-certificate.pem
+    ssh raspberrypi -c 'rm /etc/tedge/device-certs/tedge-certificate.pem'
+    scp "$CRT_FILE" raspberrypi:/etc/tedge/device-certs/tedge-certificate.pem
+}
+
+create-csr() {
+
+    # openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 10000 -nodes
+    openssl req -x509 -key rsa:4096 -keyout key.pem -out cert.pem -days 10000 -nodes
+    ssh raspberrypi "sudo openssl req -x509 -key /etc/tedge/device-certs/tedge-private-key.pem -out /etc/tedge/device-certs/tedge.csr -days 10000 -nodes"
+    # openssl req -newkey rsa:2048 -keyout PRIVATEKEY.key -out MYCSR.csr
+}
+
+KEY="/etc/tedge/device-certs/tedge-private-key.pem"
+PEM="/etc/tedge/device-certs/tedge-certificate.crt"
+CSR="/etc/tedge/device-certs/tedge.csr"
+
+#https://www.shellhacks.com/create-csr-openssl-without-prompt-non-interactive/
+
+# new key
+openssl req -nodes -newkey rsa:4096 -keyout "$KEY" -out "$CSR" -subj "/C=GB/ST=London/L=London/O=Global Security/OU=IT Department/CN=example.com"
+
+# existing key
+openssl req -new -key "$KEY" -out "$CSR" -subj "/C=GB/ST=London/L=London/O=Global Security/OU=IT Department/CN=example.com"
+
+
+#sudo chown mosquitto:mosquitto /etc/tedge/device-certs/tedge-private-key.pem
+
+sign-csr() {
+    mkcert -client -ecdsa
+}
+
+create-device-cert "$@"
+
+

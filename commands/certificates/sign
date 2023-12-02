@@ -1,0 +1,52 @@
+#!/bin/bash
+#
+# References:
+# https://gist.github.com/fntlnz/cf14feb5a46b2eda428e000157447309
+#
+set -e
+
+# Must be called with root
+
+DEVICE_ID="$1"
+TEDGE_KEY_FILE="${TEDGE_KEY_FILE:-/etc/tedge/device-certs/tedge-private-key.pem}"
+TEDGE_PEM_FILE="${TEDGE_PEM_FILE:-/etc/tedge/device-certs/tedge-certificate.pem}"
+
+ROOT_CA_PEM=""
+ROOT_CA_KEY=""
+PKI_ENDPOINT="service/pki/csr"
+
+DURATION="${DURATION:-365}"
+
+if [ ! -f "$TEDGE_KEY_FILE" ]; then
+    echo "Creating new private key"
+    if command -v tedge; then
+        tedge cert create --device-id "$DEVICE_ID"
+    else
+        openssl genrsa -out "$TEDGE_KEY_FILE" 4096
+    fi
+fi
+
+TMP_PEM="${DEVICE_ID}.pem"
+TMP_CSR="${DEVICE_ID}.csr"
+openssl req -new -sha256 -key "$TEDGE_KEY_FILE" -subj "/CN=$DEVICE_ID, /O=Thin Edge, /OU=Test Device" -out "$TMP_CSR"
+
+# TODO: Send request to some REST API
+if [ -n "$ROOT_CA_PEM" ] && [ -n "$ROOT_CA_KEY" ]; then
+    openssl x509 -req -in "$TMP_CSR" -CA "$ROOT_CA_PEM" -CAkey "$ROOT_CA_KEY" -CAcreateserial -out "$TMP_PEM" -days "$DURATION" -sha256
+elif [ -n "$PKI_ENDPOINT" ]; then
+    echo "Sending CSR request via $PKI_ENDPOINT"
+    c8y api --method POST --url "$PKI_ENDPOINT" --file "$TMP_CSR" --outputFileRaw "$TMP_PEM"
+else
+    echo "No way of signing the certificate"
+    exit 1
+fi
+
+if [ ! -f "$TMP_PEM" ]; then
+    echo "ERROR: No certificate file was returned. Something went wrong."
+    exit 1
+fi
+
+mv "$TMP_PEM" "$TEDGE_PEM_FILE"
+rm -f "$TMP_CSR"
+
+tedge reconnect c8y
