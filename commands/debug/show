@@ -29,8 +29,11 @@ examples() {
     cat << EOT >&2
 EXAMPLES
 
-# Bootstrap a device via ssh
+# Print debug information about the thin-edge.io device
 c8y tedge debug show root@mydevice.local
+
+# (MacOS only) Print debug info but copy the markdown directly to the copy/paste buffer
+c8y tedge debug show root@rpi5-d83add9f145a.local | pbcopy
 
 EOT
 }
@@ -69,14 +72,17 @@ OS_NAME=$(ssh "$TARGET" cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2- | 
 UNAME=$(ssh "$TARGET" uname -a)
 TEDGE_VERSION=$(ssh "$TARGET" tedge --version)
 
-printf '\n'
-printf 'Debug information: (copy/paste to the ticket)\n\n'
-printf '  https://github.com/thin-edge/thin-edge.io/issues/new?assignees=&labels=bug&projects=&template=bug_report.md\n'
-printf '\n'
+# Note: Print instructions on stderr, but print actual output to stdout
+# so that it can be copied/pasted easier, e.g. using piping `pbcopy`
+
+printf '\n' >&2
+printf 'Debug information: (copy/paste to the ticket)\n\n' >&2
+printf '  https://github.com/thin-edge/thin-edge.io/issues/new?assignees=&labels=bug&projects=&template=bug_report.md\n' >&2
+printf '\n' >&2
 printf '|Property|Value|\n'
 printf '|--------|-----|\n'
 printf '|OS [incl. version]|`%s`|\n' "${OS_NAME:-unknown}"
 printf '|Hardware [incl. revision]|`%s`|\n' "${MODEL:-unknown}"
 printf '|System-Architecture|`%s`|\n' "$UNAME"
 printf '|thin-edge.io version|`%s`|\n' "$TEDGE_VERSION"
-printf ''
+printf '' >&2
