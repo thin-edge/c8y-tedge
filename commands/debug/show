@@ -71,6 +71,7 @@ MODEL=$(ssh "$TARGET" cat /proc/cpuinfo | grep Model | cut -d: -f2- | xargs)
 OS_NAME=$(ssh "$TARGET" cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2- | tr -d \")
 UNAME=$(ssh "$TARGET" uname -a)
 TEDGE_VERSION=$(ssh "$TARGET" tedge --version)
+MOSQUITTO_VERSION=$(ssh "$TARGET" /usr/sbin/mosquitto -h | head -n1 | sed 's/mosquitto version//g'| xargs)
 
 # Note: Print instructions on stderr, but print actual output to stdout
 # so that it can be copied/pasted easier, e.g. using piping `pbcopy`
@@ -85,4 +86,5 @@ printf '|OS [incl. version]|`%s`|\n' "${OS_NAME:-unknown}"
 printf '|Hardware [incl. revision]|`%s`|\n' "${MODEL:-unknown}"
 printf '|System-Architecture|`%s`|\n' "$UNAME"
 printf '|thin-edge.io version|`%s`|\n' "$TEDGE_VERSION"
+printf '|mosquitto version|`%s`|\n' "${MOSQUITTO_VERSION:-unknown}"
 printf '' >&2
