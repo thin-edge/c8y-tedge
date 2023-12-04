@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -e
+TARGET=${TARGET:-}
+
+usage() {
+    EXAMPLES=$(examples 2>&1)
+    cat << EOT >&2
+Show debug information about thin-edge.io by connecting to the device via ssh.
+
+Information is gather about the device and can be used when uploading to a Github
+ticket on https://github.com/thin-edge/thin-edge.io/issues/new?assignees=&labels=bug&projects=&template=bug_report.md
+
+USAGE
+  c8y tedge debug show <TARGET>
+
+ARGUMENTS
+  TARGET              Device hostname or ip to connect to via ssh. E.g. root@mydevice.local
+
+FLAGS
+  --examples          Show examples only
+  -h, --help          Show this help
+
+$EXAMPLES
+
+EOT
+}
+
+examples() {
+    cat << EOT >&2
+EXAMPLES
+
+# Bootstrap a device via ssh
+c8y tedge debug show root@mydevice.local
+
+EOT
+}
+
+#
+# Parse args
+#
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --examples)
+            examples
+            exit 0
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            if [ -z "$TARGET" ]; then
+                TARGET="$1"
+            elif [ -z "$DEVICE_ID" ]; then
+                DEVICE_ID="$1"
+            fi
+    esac
+    shift
+done
+
+if [ -z "$TARGET" ]; then
+    echo "Missing required positional arugment. TARGET" >&2
+    usage
+    exit 1
+fi
+
+MODEL=$(ssh "$TARGET" cat /proc/cpuinfo | grep Model | cut -d: -f2- | xargs)
+OS_NAME=$(ssh "$TARGET" cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2- | tr -d \")
+UNAME=$(ssh "$TARGET" uname -a)
+TEDGE_VERSION=$(ssh "$TARGET" tedge --version)
+
+printf '\n'
+printf 'Debug information: (copy/paste to the ticket)\n\n'
+printf '  https://github.com/thin-edge/thin-edge.io/issues/new?assignees=&labels=bug&projects=&template=bug_report.md\n'
+printf '\n'
+printf '|Property|Value|\n'
+printf '|--------|-----|\n'
+printf '|OS [incl. version]|`%s`|\n' "${OS_NAME:-unknown}"
+printf '|Hardware [incl. revision]|`%s`|\n' "${MODEL:-unknown}"
+printf '|System-Architecture|`%s`|\n' "$UNAME"
+printf '|thin-edge.io version|`%s`|\n' "$TEDGE_VERSION"
+printf ''
