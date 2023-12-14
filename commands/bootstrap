@@ -101,6 +101,11 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+EXEC_CMD=(
+    ssh
+    -n
+)
+
 do_action() {
     if [ $# -gt 0 ]; then
         TARGET="$1"
@@ -111,23 +116,23 @@ do_action() {
 
     # TODO: Check if the device is already connected or not, otherwise this command will fail if the url is already set.
     # shellcheck disable=SC2029
-    ssh -n "$TARGET" tedge config set c8y.url "$C8Y_DOMAIN"
+    "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.url "$C8Y_DOMAIN"
 
     # Create the device certificate, ignore any errors as this could have already happened
     # Generally the device cert should not be deleted, so just fail silently for now
     if [ -n "$DEVICE_ID" ]; then
         # Use the user given device-id
-        ssh -n "$TARGET" tedge cert create --device-id "$DEVICE_ID" 2>/dev/null ||:
+        "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id "$DEVICE_ID" 2>/dev/null ||:
     else
         # Default to the hostname of the device
-        ssh -n "$TARGET" tedge cert create --device-id '$HOSTNAME' 2>/dev/null ||:
+        "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id '$HOSTNAME' 2>/dev/null ||:
     fi
 
     # Get public cert
-    PUBLIC_CERT=$(ssh "$TARGET" "cat \$(tedge config get device.cert_path)")
+    PUBLIC_CERT=$("${EXEC_CMD[@]}" "$TARGET" /bin/sh -c "cat \$(tedge config get device.cert_path)")
 
     if [ -z "$DEVICE_ID" ]; then
-        DEVICE_ID=$(ssh -n "$TARGET" "tedge config get device.id")
+        DEVICE_ID=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.id)
     fi
 
     echo "Certificate CN: $DEVICE_ID" >&2
@@ -140,14 +145,14 @@ do_action() {
         --silentExit --silentStatusCodes 409
 
     # Wait for certificate to be enabled
-    if ! ssh -n "$TARGET" tedge connect c8y --test >/dev/null 2>&1; then
+    if ! "${EXEC_CMD[@]}" "$TARGET" tedge connect c8y --test >/dev/null 2>&1; then
         sleep 2
 
         attempt=0
         max_attempts=10
         success=0
         while [ "$attempt" -lt "$max_attempts" ]; do
-            if ssh -n "$TARGET" tedge connect c8y; then
+            if "${EXEC_CMD[@]}" "$TARGET" tedge connect c8y; then
                 success=1
                 break
             fi
