@@ -108,6 +108,11 @@ do_action() {
         TARGET="$1"
     fi
 
+    if [ -z "$DEVICE_ID" ]; then
+        DEVICE_ID=$(c8y template execute -n --template "'tedge_' + _.Hex(7)")
+        echo "Using randomized device name: $DEVICE_ID" >&2
+    fi
+
     # TODO: Check if the device is already connected or not, otherwise this command will fail if the url is already set.
     # shellcheck disable=SC2029
     "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.url "$C8Y_DOMAIN"
@@ -178,10 +183,6 @@ if [ ! -t 0 ]; then
             DEVICES+=("$device")
         fi
     done < <(cat -)
-elif [ -z "$TARGET" ]; then
-    echo "Using randomized device name" >&2
-    TARGET=$(c8y template execute --template "'tedge_' + _.Hex(7)")
-    DEVICES+=("$TARGET")
 else
     echo "Using user provided device" >&2
     DEVICES+=("$TARGET")
