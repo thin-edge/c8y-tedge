@@ -30,6 +30,8 @@ ARGUMENTS
 FLAGS
   --skip-website      Don't open the Cumulocity IoT Device Management application
   --page <STRING>     Which Device Management page to open. Defaults to device-info
+  --verbose           Enable verbose logging
+  --debug             Enable debug logging
   -h, --help          Show this help
 
 $EXAMPLES
@@ -76,6 +78,13 @@ while [ $# -gt 0 ]; do
             ;;
         --skip-website)
             OPEN_WEBSITE=0
+            ;;
+        --verbose|-v)
+            export C8Y_SETTINGS_DEFAULTS_VERBOSE="true"
+            ;;
+        --debug)
+            set -x
+            export C8Y_SETTINGS_DEFAULTS_DEBUG="true"
             ;;
         *)
             if [ -z "$TARGET" ]; then
@@ -128,20 +137,28 @@ do_action() {
     fi
 
     # Get public cert
-    PUBLIC_CERT=$("${EXEC_CMD[@]}" "$TARGET" /bin/sh -c "cat \$(tedge config get device.cert_path)")
+    PUBLIC_CERT=$("${EXEC_CMD[@]}" "$TARGET" cat "\$(tedge config get device.cert_path)")
+
+    if [ -z "$PUBLIC_CERT" ]; then
+        echo "Failed to get device certifate from $TARGET" >&2
+        exit 1
+    fi
 
     if [ -z "$DEVICE_ID" ]; then
         DEVICE_ID=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.id)
     fi
 
     echo "Certificate CN: $DEVICE_ID" >&2
-    c8y devicemanagement certificates create \
+    if ! c8y devicemanagement certificates create \
         -n \
         --name "$DEVICE_ID" \
         --autoRegistrationEnabled \
         --status ENABLED \
         --file <(echo "$PUBLIC_CERT") \
-        --silentExit --silentStatusCodes 409
+        --silentExit --silentStatusCodes 409; then
+        echo "failed to upload device certificate" >&2
+        exit 1
+    fi
 
     # Wait for certificate to be enabled
     if ! "${EXEC_CMD[@]}" "$TARGET" tedge connect c8y --test >/dev/null 2>&1; then
