@@ -169,7 +169,9 @@ do_action() {
 
     # Open device management page for the device
     if [ "$OPEN_WEBSITE" = 1 ]; then
-        c8y identity get -n --name "$DEVICE_ID" | c8y applications open --application devicemanagement --page "$WEBSITE_PAGE"
+        if ! c8y identity get -n --name "$DEVICE_ID" | c8y applications open --application devicemanagement --page "$WEBSITE_PAGE"; then
+            echo "WARNING: Couldn't open deviec in webbrowser (this will not result in an error)"
+        fi
     fi
 }
 
