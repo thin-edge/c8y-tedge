@@ -178,7 +178,7 @@ do_action() {
 
 DEVICES=()
 
-if [ ! -t 0 ]; then
+if [ ! -t 0 ] && [ -z "$CI" ]; then
     echo "Reading from pipeline" >&2
     while IFS= read -r device; do
         if [ -n "$device" ] && [[ "${device}" =~ $PATTERN ]]; then
