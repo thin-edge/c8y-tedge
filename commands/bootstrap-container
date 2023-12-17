@@ -137,7 +137,7 @@ do_action() {
     fi
 
     # Get public cert
-    PUBLIC_CERT=$("${EXEC_CMD[@]}" "$TARGET" cat "\$(tedge config get device.cert_path)")
+    PUBLIC_CERT=$("${EXEC_CMD[@]}" "$TARGET" /bin/sh -c "cat \$(tedge config get device.cert_path)")
 
     if [ -z "$PUBLIC_CERT" ]; then
         echo "Failed to get device certifate from $TARGET" >&2
