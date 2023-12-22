@@ -125,7 +125,13 @@ do_action() {
 
     # TODO: Check if the device is already connected or not, otherwise this command will fail if the url is already set.
     # shellcheck disable=SC2029
-    "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.url "$C8Y_DOMAIN"
+    URL=
+    if [ -n "$C8Y_DOMAIN" ]; then
+        URL="$C8Y_DOMAIN"
+    else
+        URL=$(c8y sessions get --select host -o csv | sed -E 's|https?://||')
+    fi
+    "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.url "$URL"
 
     # Create the device certificate, ignore any errors as this could have already happened
     # Generally the device cert should not be deleted, so just fail silently for now
