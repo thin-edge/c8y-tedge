@@ -24,7 +24,7 @@ USAGE
   c8y tedge bootstrap-container <CONTAINER> [DEVICE_ID]
 
 ARGUMENTS
-  CONTAINER           Container name, e.g. tedge
+  CONTAINER           Container name or compose service name, e.g. tedge
   DEVICE_ID           Device id to be assigned to the device. This will only be used if the device
                       has not already been bootstrapped. If one is not given, then a random name will be assigned
 
