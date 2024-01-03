@@ -6,6 +6,7 @@ OPEN_WEBSITE=1
 WEBSITE_PAGE="device-info"
 SCAN=${SCAN:-0}
 PATTERN="${PATTERN:-.+}"
+C8Y_TEDGE_CONTAINER_CLI="${C8Y_TEDGE_CONTAINER_CLI:-}"
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -23,16 +24,17 @@ USAGE
   c8y tedge bootstrap-container <CONTAINER> [DEVICE_ID]
 
 ARGUMENTS
-  CONTAINER           Container name, e.g. tedge
+  CONTAINER           Container name or compose service name, e.g. tedge
   DEVICE_ID           Device id to be assigned to the device. This will only be used if the device
                       has not already been bootstrapped. If one is not given, then a random name will be assigned
 
 FLAGS
-  --skip-website      Don't open the Cumulocity IoT Device Management application
-  --page <STRING>     Which Device Management page to open. Defaults to device-info
-  --verbose           Enable verbose logging
-  --debug             Enable debug logging
-  -h, --help          Show this help
+  --container-cli <STRING>    Container cli, e.g. docker, nerdctl, podman. Can also be set via the environment variable, C8Y_TEDGE_CONTAINER_CLI
+  --skip-website              Don't open the Cumulocity IoT Device Management application
+  --page <STRING>             Which Device Management page to open. Defaults to device-info
+  --verbose                   Enable verbose logging
+  --debug                     Enable debug logging
+  -h, --help                  Show this help
 
 $EXAMPLES
 
@@ -49,8 +51,15 @@ c8y tedge bootstrap-container container01
 # Bootstrap a container using using a given device id
 c8y tedge bootstrap-container container01 customname_001
 
-# Bootstrap a device via ssh but don't open the website
+# Bootstrap a device but don't open the website
 c8y tedge bootstrap-container container01 --skip-website
+
+# Bootstrap a device using podman 
+c8y tedge bootstrap-container container01 --container-cli podman
+
+# Bootstrap a device using nerdctl (by setting an environment variable)
+export C8Y_TEDGE_CONTAINER_CLI=nerdctl
+c8y tedge bootstrap-container container01
 
 EOT
 }
@@ -76,6 +85,10 @@ while [ $# -gt 0 ]; do
             DEVICE_ID="$2"
             shift
             ;;
+        --container-cli)
+            C8Y_TEDGE_CONTAINER_CLI="$2"
+            shift
+            ;;
         --skip-website)
             OPEN_WEBSITE=0
             ;;
@@ -96,18 +109,37 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# Try auto detecting container cli (based on what is available)
+if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
+    if command -V docker >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=docker
+    elif command -V nerdctl >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=nerdctl
+    elif command -V podman >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=podman
+    fi
+fi
+
+if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
+    echo "Error: Could not find a container cli, e.g. docker, nerdctl, podman" >&2
+    exit 1
+fi
+
+echo "Using container cli: $C8Y_TEDGE_CONTAINER_CLI" >&2
+
 # Default to docker
 EXEC_CMD=(
-    docker
+    "$C8Y_TEDGE_CONTAINER_CLI"
     exec
 )
 
 # Auto detect a local docker-compose file and use the service name instead
 if [ -f docker-compose.yaml ] || [ -f docker-compose.yml ]; then
     EXEC_CMD=(
-        docker
+        "$C8Y_TEDGE_CONTAINER_CLI"
         compose
         exec
+        --no-TTY
     )
 fi
 
