@@ -109,6 +109,14 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# Load .env automatically so it plays nicely with docker compose which also does this
+if [ -f .env ]; then
+    echo "Loading .env file" >&2
+    set -o allexport
+    . .env ||:
+    set +o allexport
+fi
+
 # Try auto detecting container cli (based on what is available)
 if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
     if command -V docker >/dev/null 2>&1; then
