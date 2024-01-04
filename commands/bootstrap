@@ -110,6 +110,14 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# Load .env automatically
+if [ -f .env ]; then
+    echo "Loading .env file" >&2
+    set -o allexport
+    . .env ||:
+    set +o allexport
+fi
+
 EXEC_CMD=(
     ssh
     -n
