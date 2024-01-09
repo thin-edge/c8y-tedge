@@ -148,7 +148,7 @@ CHECK_CMD=(
 )
 
 # Auto detect a local docker-compose file and use the service name instead
-if [ -f docker-compose.yaml ] || [ -f docker-compose.yml ]; then
+if [ -f "$COMPOSE_FILE" ] || [ -f docker-compose.yaml ] || [ -f docker-compose.yml ]; then
     EXEC_CMD=(
         "$C8Y_TEDGE_CONTAINER_CLI"
         compose
