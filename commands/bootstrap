@@ -7,6 +7,7 @@ WEBSITE_PAGE="device-info"
 SSH_USER=
 SCAN=${SCAN:-0}
 PATTERN="${PATTERN:-.+}"
+BOOTSTRAP_TYPE="${BOOTSTRAP_TYPE:-local-ca}"
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -29,13 +30,14 @@ ARGUMENTS
                       has not already been bootstrapped.
 
 FLAGS
-  --skip-website      Don't open the Cumulocity IoT Device Management application
-  --page <STRING>     Which Device Management page to open. Defaults to device-info
-  --scan              Bootstrap devices found by a scan
-  --pattern <REGEX>   Only include devices which match the given pattern (only applies when piping or scanning devices)
-  --verbose           Enable verbose logging
-  --debug             Enable debug logging
-  -h, --help          Show this help
+  --skip-website                    Don't open the Cumulocity IoT Device Management application
+  --page <STRING>                   Which Device Management page to open. Defaults to device-info
+  --type <local-ca|self-signed>     Certificate signing method. Accepts local-ca (default), self-signed
+  --scan                            Bootstrap devices found by a scan
+  --pattern <REGEX>                 Only include devices which match the given pattern (only applies when piping or scanning devices)
+  --verbose                         Enable verbose logging
+  --debug                           Enable debug logging
+  -h, --help                        Show this help
 
 $EXAMPLES
 
@@ -48,6 +50,9 @@ EXAMPLES
 
 # Bootstrap a device via ssh
 c8y tedge bootstrap root@mydevice.local
+
+# Bootstrap a device via ssh using a self signed certificate
+c8y tedge bootstrap root@mydevice.local --type self-signed
 
 # Bootstrap a device via ssh but don't open the website
 c8y tedge bootstrap root@mydevice.local --skip-website
@@ -77,6 +82,10 @@ while [ $# -gt 0 ]; do
             ;;
         --device-id)
             DEVICE_ID="$2"
+            shift
+            ;;
+        --type)
+            BOOTSTRAP_TYPE="$2"
             shift
             ;;
         --scan)
@@ -118,30 +127,115 @@ if [ -f .env ]; then
     set +o allexport
 fi
 
-EXEC_CMD=(
-    ssh
-    -n
-)
+if ! command -V openssl >/dev/null 2>&1; then
+    echo "Missing dependency: openssl is not installed" >&2
+    exit 1
+fi
 
-do_action() {
-    if [ $# -gt 0 ]; then
-        TARGET="$1"
+info() {
+    if [ "$C8Y_SETTINGS_DEFAULTS_VERBOSE" = "true" ]; then
+        printf "%s\tINFO\t%s" "$(date -Iseconds || true)" "$@" >&2
     fi
-    if [ -n "$SSH_USER" ]; then
-        TARGET="$SSH_USER@$TARGET"
-    fi
+}
 
-    # TODO: Check if the device is already connected or not, otherwise this command will fail if the url is already set.
-    # shellcheck disable=SC2029
-    URL=
-    if [ -n "$C8Y_DOMAIN" ]; then
-        URL="$C8Y_DOMAIN"
+error() {
+    printf "%s\tINFO\t%s" "$(date -Iseconds || true)" "$@" >&2
+}
+
+CA_CERT_FILE="${CA_CERT_FILE:-$HOME/tedge-ca.crt}"
+CA_CERT_KEY="${CA_CERT_KEY:-$HOME/tedge-ca.key}"
+LEAF_EXPIRE_DAYS=365
+
+create_ca() {
+    #
+    # Create new ca (signing certificate)
+    #
+    if [ -f "$CA_CERT_KEY" ] && [ -f "$CA_CERT_FILE" ]; then
+        echo "Using existing CA certificate. cert=$CA_CERT_FILE" >&2
+        return
+    fi
+    CA_COMMON_NAME="${CA_COMMON_NAME:-"tedge-ca-$USER"}"
+    CA_OU="${CA_OU:-dev}"
+    CA_EXPIRE_DAYS="${CA_EXPIRE_DAYS:-365}"
+
+    # CN=mkcert reubenmiller@SAG-LJWQ4P62TY (Reuben Miller), OU=reubenmiller@SAG-LJWQ4P62TY (Reuben Miller), O=mkcert development CA
+    openssl req \
+        -new \
+        -x509 \
+        -days "$CA_EXPIRE_DAYS" \
+        -extensions v3_ca \
+        -nodes \
+        -subj "/O=thin-edge/OU=dev/CN=$CA_COMMON_NAME" \
+        -keyout "$CA_CERT_KEY" \
+        -out "$CA_CERT_FILE" >/dev/null 2>&1
+
+    if ! c8y devicemanagement certificates create \
+        -n \
+        --name "$CA_COMMON_NAME" \
+        --autoRegistrationEnabled \
+        --status ENABLED \
+        --file "$CA_CERT_FILE" \
+        --silentExit --silentStatusCodes 409; then
+        echo "failed to upload device certificate" >&2
+        exit 1
+    fi
+}
+
+create_remote_cert() {
+    DEVICE_KEY_PATH=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.key_path)
+    DEVICE_CERT_PATH=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.cert_path)
+
+    if ! "${EXEC_CMD[@]}" "$TARGET" test -f "$DEVICE_KEY_PATH"; then
+        info "Creating device private key"
+        "${EXEC_CMD[@]}" "$TARGET" openssl genrsa -out "$DEVICE_KEY_PATH" 2048
     else
-        URL=$(c8y sessions get --select host -o csv | sed -E 's|https?://||')
+        info "Using existing private key"
     fi
-    "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.url "$URL"
 
-    # Create the device certificate, ignore any errors as this could have already happened
+    # Create Certificate Signing Request (CSR)
+    DEVICE_CSR=$(
+        "${EXEC_CMD[@]}" "$TARGET" openssl req \
+            -key "$DEVICE_KEY_PATH" \
+            -new \
+            -subj "/O=thin-edge/OU=Test\ Device/CN=${DEVICE_ID}"
+    )
+
+    # Protect certificate (after csr is created)
+    "${EXEC_CMD[@]}" "$TARGET" sudo chown mosquitto:root "$DEVICE_KEY_PATH"
+    "${EXEC_CMD[@]}" "$TARGET" sudo chmod 600 "$DEVICE_KEY_PATH"
+
+    # Sign the CSR
+    CERT_EXT=$(cat << EOF
+authorityKeyIdentifier=keyid
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyAgreement
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName=DNS:${TARGET},DNS:localhost
+EOF
+    )
+
+    DEVICE_CERT_CHAIN="/tmp/${DEVICE_ID}.crt"
+    openssl x509 -req \
+        -in <(echo "$DEVICE_CSR") \
+        -out "$DEVICE_CERT_CHAIN" \
+        -CA "$CA_CERT_FILE" \
+        -CAkey "$CA_CERT_KEY" \
+        -extfile <(echo "$CERT_EXT") \
+        -CAcreateserial \
+        -days "$LEAF_EXPIRE_DAYS"
+
+    # Build certificate chain (from leaf cert to the signing cert)
+    cat "$CA_CERT_FILE" >> "$DEVICE_CERT_CHAIN"
+
+    # Copy cert to device
+    scp "$DEVICE_CERT_CHAIN" "$TARGET:/tmp/${DEVICE_ID}.crt"
+    "${EXEC_CMD[@]}" "$TARGET" sudo mv "/tmp/${DEVICE_ID}.crt" "$DEVICE_CERT_PATH"
+    "${EXEC_CMD[@]}" "$TARGET" sudo chown mosquitto:root "$DEVICE_CERT_PATH"
+    "${EXEC_CMD[@]}" "$TARGET" sudo chmod 644 "$DEVICE_CERT_PATH"
+}
+
+create_self_signed() {
+     # Create the device certificate, ignore any errors as this could have already happened
     # Generally the device cert should not be deleted, so just fail silently for now
     if [ -n "$DEVICE_ID" ]; then
         # Use the user given device-id
@@ -173,6 +267,98 @@ do_action() {
         --silentExit --silentStatusCodes 409; then
         echo "failed to upload device certificate" >&2
         exit 1
+    fi
+}
+
+device_certificate_exists() {
+    target="$1"
+    DEVICE_KEY_PATH=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.key_path)
+    DEVICE_CERT_PATH=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.cert_path)
+
+    if "${EXEC_CMD[@]}" "$TARGET" test -f "$DEVICE_KEY_PATH" && "${EXEC_CMD[@]}" "$target" test -f "$DEVICE_CERT_PATH"; then
+        echo "Device certificate already exists" >&2
+        return 0
+    fi
+
+    return 1
+}
+
+get_device_id() {
+    # Get identity (stop on first non empty value)
+    target="$1"
+    device_id="$2"
+    _device_id_method=1
+    while [ -z "$device_id" ]; do
+        case "$_device_id_method" in
+            1)
+                # use the existing value
+                info "Trying to get identity using tedge config"
+                device_id=$("${EXEC_CMD[@]}" "$target" tedge config get device.id 2>/dev/null || true)
+                ;;
+            2)
+                # try using tedge-identity
+                info "Trying to get identity using tedge-identity"
+                device_id=$("${EXEC_CMD[@]}" "$target" tedge-identity 2>/dev/null || true)
+                ;;
+            3)
+                # hostname
+                info "Trying to get identity using hostname"
+                device_id=$("${EXEC_CMD[@]}" "$target" hostname 2>/dev/null || true)
+                ;;
+            *)
+                break
+                ;;
+        esac
+        ((_device_id_method++))
+    done
+    echo "$device_id"
+}
+
+
+EXEC_CMD=(
+    ssh
+    -n
+)
+
+do_action() {
+    if [ $# -gt 0 ]; then
+        TARGET="$1"
+    fi
+    if [ -n "$SSH_USER" ]; then
+        TARGET="$SSH_USER@$TARGET"
+    fi
+
+    # TODO: Check if the device is already connected or not, otherwise this command will fail if the url is already set.
+    # shellcheck disable=SC2029
+    URL=
+    if [ -n "$C8Y_DOMAIN" ]; then
+        URL="$C8Y_DOMAIN"
+    else
+        URL=$(c8y sessions get --select host -o csv | sed -E 's|https?://||')
+    fi
+    "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.url "$URL"
+
+    # Get identity
+    DEVICE_ID=$(get_device_id "$TARGET" "$DEVICE_ID")
+    if [ -z "$DEVICE_ID" ]; then
+        echo "Could not detect a device id" >&2
+        exit 1
+    fi
+
+    if ! device_certificate_exists "$TARGET"; then
+        case "$BOOTSTRAP_TYPE" in
+                self-signed)
+                    create_self_signed
+                    ;;
+                local-ca)
+                    create_ca
+                    create_remote_cert
+                    ;;
+                *)
+                    echo "Unknown bootstrapping method" >&2
+                    exit 1
+                    ;;
+        esac
     fi
 
     # Wait for certificate to be enabled
@@ -227,9 +413,18 @@ else
     DEVICES+=("$TARGET")
 fi
 
-if [ "${#DEVICES[@]}" -gt 0 ]; then
-    echo "Found ${#DEVICES[@]} devices" >&2
-fi
+
+case "${#DEVICES[@]}" in
+    0)
+        echo "No devices were found" >&2
+        ;;
+    1)
+        echo "Found ${#DEVICES[@]} device" >&2
+        ;;
+    *)
+        echo "Found ${#DEVICES[@]} devices" >&2
+        ;;
+esac
 
 for device in "${DEVICES[@]}"; do
     do_action "$device"
