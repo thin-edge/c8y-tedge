@@ -349,6 +349,16 @@ do_action() {
     else
         URL=$(c8y sessions get --select host -o csv | sed -E 's|https?://||')
     fi
+
+    # Disconnect if tedge is already connected
+    # Note: Check if the mapper is configured or not but it can't be assumed that it is successfully configured
+    EXISTING_C8Y_URL=$("${EXEC_CMD[@]}" "$TARGET" tedge config get c8y.url 2>/dev/null)
+    if [ -n "$EXISTING_C8Y_URL" ]; then
+        # TODO: Add option to abort if already bootstrapped (to prevent accidental)
+        echo "tedge is already connected, so disconnecting before bootstrapping" >&2
+        "${EXEC_CMD[@]}" "$TARGET" tedge disconnect c8y ||:
+    fi
+
     "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.url "$URL"
 
     # Get identity
