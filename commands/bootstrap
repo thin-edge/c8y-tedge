@@ -7,7 +7,7 @@ WEBSITE_PAGE="device-info"
 SSH_USER=
 SCAN=${SCAN:-0}
 PATTERN="${PATTERN:-.+}"
-BOOTSTRAP_TYPE="${BOOTSTRAP_TYPE:-local-ca}"
+BOOTSTRAP_TYPE="${BOOTSTRAP_TYPE:-}"
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -15,11 +15,18 @@ usage() {
 Bootstrap a thin-edge.io device using ssh.
 The device must be reachable via ssh on the local network.
 
-The bootstrapping processes does:
+The supported bootstraping methods are described below:
 
-* Create the device certificate (if required)
-* Fetch public device certificate and upload it to Cumulocity IoT (private key does not leave the device)
-* Open the device in the Cumulocity IoT Device Management application
+Type: local-ca
+1. Create local-ca (if one does not already exist)
+2. On the device, create a CSR
+3. Sign the CSR (on the host)
+4. Copy the public certificate back to the device
+
+Type: self-signed
+1. Create the device certificate (if required)
+2. Fetch public device certificate and upload it to Cumulocity IoT (private key does not leave the device)
+3. Open the device in the Cumulocity IoT Device Management application
 
 USAGE
   c8y tedge bootstrap <TARGET> [DEVICE_ID]
@@ -123,13 +130,18 @@ done
 if [ -f .env ]; then
     echo "Loading .env file" >&2
     set -o allexport
+    # shellcheck disable=SC1091
     . .env ||:
     set +o allexport
 fi
 
-if ! command -V openssl >/dev/null 2>&1; then
-    echo "Missing dependency: openssl is not installed" >&2
-    exit 1
+# Set default bootstrap type (based on what dependencies are available)
+if [ -z "$BOOTSTRAP_TYPE" ]; then
+    if command -V openssl >/dev/null 2>&1; then
+        BOOTSTRAP_TYPE=local-ca
+    else
+        BOOTSTRAP_TYPE=self-signed
+    fi
 fi
 
 info() {
@@ -150,24 +162,30 @@ create_ca() {
     #
     # Create new ca (signing certificate)
     #
-    if [ -f "$CA_CERT_KEY" ] && [ -f "$CA_CERT_FILE" ]; then
-        echo "Using existing CA certificate. cert=$CA_CERT_FILE" >&2
-        return
-    fi
     CA_COMMON_NAME="${CA_COMMON_NAME:-"tedge-ca-$USER"}"
     CA_OU="${CA_OU:-dev}"
     CA_EXPIRE_DAYS="${CA_EXPIRE_DAYS:-365}"
 
-    # CN=mkcert reubenmiller@SAG-LJWQ4P62TY (Reuben Miller), OU=reubenmiller@SAG-LJWQ4P62TY (Reuben Miller), O=mkcert development CA
-    openssl req \
-        -new \
-        -x509 \
-        -days "$CA_EXPIRE_DAYS" \
-        -extensions v3_ca \
-        -nodes \
-        -subj "/O=thin-edge/OU=dev/CN=$CA_COMMON_NAME" \
-        -keyout "$CA_CERT_KEY" \
-        -out "$CA_CERT_FILE" >/dev/null 2>&1
+    if [ -f "$CA_CERT_KEY" ] && [ -f "$CA_CERT_FILE" ]; then
+        echo "Using existing CA certificate. cert=$CA_CERT_FILE" >&2
+    else
+        # CN=mkcert reubenmiller@SAG-LJWQ4P62TY (Reuben Miller), OU=reubenmiller@SAG-LJWQ4P62TY (Reuben Miller), O=mkcert development CA
+        openssl req \
+            -new \
+            -x509 \
+            -days "$CA_EXPIRE_DAYS" \
+            -extensions v3_ca \
+            -nodes \
+            -subj "/O=thin-edge/OU=dev/CN=$CA_COMMON_NAME" \
+            -keyout "$CA_CERT_KEY" \
+            -out "$CA_CERT_FILE" >/dev/null 2>&1
+    fi
+
+    FINGERPRINT=$(openssl x509 -fingerprint -noout -in "$CA_CERT_FILE" | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+    if c8y devicemanagement certificates get --id "$FINGERPRINT" >/dev/null 2>&1; then
+        echo "Certificate has already been uploaded to c8y. fingerprint=$FINGERPRINT" >&2
+        return
+    fi
 
     if ! c8y devicemanagement certificates create \
         -n \
@@ -179,6 +197,7 @@ create_ca() {
         echo "failed to upload device certificate" >&2
         exit 1
     fi
+    echo "Uploaded certificate" >&2
 }
 
 create_remote_cert() {
@@ -242,6 +261,7 @@ create_self_signed() {
         "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id "$DEVICE_ID" 2>/dev/null ||:
     else
         # Default to the hostname of the device
+        # shellcheck disable=SC2016
         "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id '$HOSTNAME' 2>/dev/null ||:
     fi
 
@@ -257,6 +277,12 @@ create_self_signed() {
         DEVICE_ID=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.id)
     fi
 
+    FINGERPRINT=$("${EXEC_CMD[@]}" "$TARGET" tedge cert show | grep Thumbprint | cut -d' ' -f2 | tr '[:upper:]' '[:lower:]')
+    if c8y devicemanagement certificates get --id "$FINGERPRINT" >/dev/null 2>&1; then
+        echo "Certificate has already been uploaded to c8y. fingerprint=$FINGERPRINT" >&2
+        return
+    fi
+
     echo "Certificate CN: $DEVICE_ID" >&2
     if ! c8y devicemanagement certificates create \
         -n \
@@ -268,19 +294,6 @@ create_self_signed() {
         echo "failed to upload device certificate" >&2
         exit 1
     fi
-}
-
-device_certificate_exists() {
-    target="$1"
-    DEVICE_KEY_PATH=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.key_path)
-    DEVICE_CERT_PATH=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.cert_path)
-
-    if "${EXEC_CMD[@]}" "$TARGET" test -f "$DEVICE_KEY_PATH" && "${EXEC_CMD[@]}" "$target" test -f "$DEVICE_CERT_PATH"; then
-        echo "Device certificate already exists" >&2
-        return 0
-    fi
-
-    return 1
 }
 
 get_device_id() {
@@ -345,21 +358,23 @@ do_action() {
         exit 1
     fi
 
-    if ! device_certificate_exists "$TARGET"; then
-        case "$BOOTSTRAP_TYPE" in
-                self-signed)
-                    create_self_signed
-                    ;;
-                local-ca)
-                    create_ca
-                    create_remote_cert
-                    ;;
-                *)
-                    echo "Unknown bootstrapping method" >&2
+    case "$BOOTSTRAP_TYPE" in
+            self-signed)
+                create_self_signed
+                ;;
+            local-ca)
+                if ! command -V openssl >/dev/null 2>&1; then
+                    echo "Missing dependency: openssl is not installed" >&2
                     exit 1
-                    ;;
-        esac
-    fi
+                fi
+                create_ca
+                create_remote_cert
+                ;;
+            *)
+                echo "Unknown bootstrapping method" >&2
+                exit 1
+                ;;
+    esac
 
     # Wait for certificate to be enabled
     if ! "${EXEC_CMD[@]}" "$TARGET" tedge connect c8y --test >/dev/null 2>&1; then
