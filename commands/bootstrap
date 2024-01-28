@@ -8,6 +8,7 @@ SSH_USER=
 SCAN=${SCAN:-0}
 PATTERN="${PATTERN:-.+}"
 BOOTSTRAP_TYPE="${BOOTSTRAP_TYPE:-}"
+SUDO=${SUDO:-}
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -201,27 +202,27 @@ create_ca() {
 }
 
 create_remote_cert() {
-    DEVICE_KEY_PATH=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.key_path)
-    DEVICE_CERT_PATH=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.cert_path)
+    DEVICE_KEY_PATH=$("${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config get device.key_path)
+    DEVICE_CERT_PATH=$("${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config get device.cert_path)
 
     if ! "${EXEC_CMD[@]}" "$TARGET" test -f "$DEVICE_KEY_PATH"; then
         info "Creating device private key"
-        "${EXEC_CMD[@]}" "$TARGET" openssl genrsa -out "$DEVICE_KEY_PATH" 2048
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO openssl genrsa -out "$DEVICE_KEY_PATH" 2048
     else
         info "Using existing private key"
     fi
 
     # Create Certificate Signing Request (CSR)
     DEVICE_CSR=$(
-        "${EXEC_CMD[@]}" "$TARGET" openssl req \
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO openssl req \
             -key "$DEVICE_KEY_PATH" \
             -new \
             -subj "/O=thin-edge/OU=Test\ Device/CN=${DEVICE_ID}"
     )
 
     # Protect certificate (after csr is created)
-    "${EXEC_CMD[@]}" "$TARGET" sudo chown mosquitto:root "$DEVICE_KEY_PATH"
-    "${EXEC_CMD[@]}" "$TARGET" sudo chmod 600 "$DEVICE_KEY_PATH"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO chown mosquitto:root "$DEVICE_KEY_PATH"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO chmod 600 "$DEVICE_KEY_PATH"
 
     # Sign the CSR
     CERT_EXT=$(cat << EOF
@@ -258,11 +259,11 @@ create_self_signed() {
     # Generally the device cert should not be deleted, so just fail silently for now
     if [ -n "$DEVICE_ID" ]; then
         # Use the user given device-id
-        "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id "$DEVICE_ID" 2>/dev/null ||:
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge cert create --device-id "$DEVICE_ID" 2>/dev/null ||:
     else
         # Default to the hostname of the device
         # shellcheck disable=SC2016
-        "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id '$HOSTNAME' 2>/dev/null ||:
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge cert create --device-id '$HOSTNAME' 2>/dev/null ||:
     fi
 
     # Get public cert
@@ -341,6 +342,16 @@ do_action() {
         TARGET="$SSH_USER@$TARGET"
     fi
 
+    # Don't use sudo if the user is root
+    case "$TARGET" in
+        root)
+            SUDO=
+            ;;
+        *)
+            SUDO=sudo
+            ;;
+    esac
+
     # TODO: Check if the device is already connected or not, otherwise this command will fail if the url is already set.
     # shellcheck disable=SC2029
     URL=
@@ -352,21 +363,21 @@ do_action() {
 
     # Disconnect if tedge is already connected
     # Note: Check if the mapper is configured or not but it can't be assumed that it is successfully configured
-    EXISTING_C8Y_URL=$("${EXEC_CMD[@]}" "$TARGET" tedge config get c8y.url 2>/dev/null)
+    EXISTING_C8Y_URL=$("${EXEC_CMD[@]}" "$TARGET" tedge config get c8y.url 2>/dev/null ||:)
     if [ -n "$EXISTING_C8Y_URL" ]; then
         # TODO: Add option to abort if already bootstrapped (to prevent accidental)
         echo "tedge is already connected, so disconnecting before bootstrapping" >&2
-        "${EXEC_CMD[@]}" "$TARGET" tedge disconnect c8y ||:
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge disconnect c8y ||:
 
         # Clear some existing state
         # FIXME: Remove once the following are resolved
         # * https://github.com/thin-edge/thin-edge.io/issues/2584
         # * https://github.com/thin-edge/thin-edge.io/issues/2606
-        "${EXEC_CMD[@]}" "$TARGET" systemctl stop mosquitto tedge-agent
-        "${EXEC_CMD[@]}" "$TARGET" rm -f /var/lib/mosquitto/mosquitto.db /etc/tedge/.tedge-mapper-c8y/entity_store.jsonl /data/mosquitto/mosquitto.db
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO systemctl stop mosquitto tedge-agent
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO rm -f /var/lib/mosquitto/mosquitto.db /etc/tedge/.tedge-mapper-c8y/entity_store.jsonl /data/mosquitto/mosquitto.db
     fi
 
-    "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.url "$URL"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.url "$URL"
 
     # Get identity
     DEVICE_ID=$(get_device_id "$TARGET" "$DEVICE_ID")
@@ -394,14 +405,14 @@ do_action() {
     esac
 
     # Wait for certificate to be enabled
-    if ! "${EXEC_CMD[@]}" "$TARGET" tedge connect c8y --test >/dev/null 2>&1; then
+    if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y --test >/dev/null 2>&1; then
         sleep 2
 
         attempt=0
         max_attempts=10
         success=0
         while [ "$attempt" -lt "$max_attempts" ]; do
-            if "${EXEC_CMD[@]}" "$TARGET" tedge connect c8y; then
+            if "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y; then
                 success=1
                 break
             fi
