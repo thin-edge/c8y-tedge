@@ -3,3 +3,5 @@
 .venv/
 output.xml
 bootstrapper/c8y-tedge/c8y-tedge
+src/c8y-tedge/c8y-tedge
+/c8y-tedge
