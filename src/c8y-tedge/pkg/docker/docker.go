@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -18,7 +19,7 @@ type DockerRunner struct {
 	container string
 }
 
-func NewDockerRunner(target string) (*DockerRunner, error) {
+func NewDockerRunner(target ...string) (*DockerRunner, error) {
 	cli, err := client.NewClientWithOpts(
 		client.FromEnv,
 		client.WithAPIVersionNegotiation(),
@@ -29,7 +30,9 @@ func NewDockerRunner(target string) (*DockerRunner, error) {
 	runner := &DockerRunner{
 		client: cli,
 	}
-	runner.SetTarget(target)
+	if len(target) > 0 {
+		runner.SetTarget(target[0])
+	}
 	return runner, nil
 }
 
@@ -38,6 +41,36 @@ func NewDockerRunner(target string) (*DockerRunner, error) {
 // https://github.com/compose-spec/compose-spec/blob/master/spec.md
 // com.docker.compose.project
 // com.docker.compose.service
+
+func (r *DockerRunner) ListContainers(ctx context.Context, filterArgs ...filters.KeyValuePair) ([]string, error) {
+
+	filters := filters.NewArgs(filterArgs...)
+	// for _, filter := range filterArgs {
+	// 	filters.Add()
+	// }
+	// filters.Add("label", "label1")
+
+	containers, err := r.client.ContainerList(ctx, container.ListOptions{
+		Filters: filters,
+		// Filters: filters.NewArgs(
+		// 	filters.KeyValuePair{
+		// 		Key:   "Label",
+		// 		Value: "",
+		// 	},
+		// ),
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	names := []string{}
+	for _, container := range containers {
+		if len(container.Names) > 0 {
+			names = append(names, strings.TrimLeft(container.Names[0], "/"))
+		}
+	}
+	return names, nil
+}
 
 func (r *DockerRunner) SetTarget(target string) error {
 	r.container = target
