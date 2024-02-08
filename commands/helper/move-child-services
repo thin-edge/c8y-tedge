@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -e
+
+examples() {
+    cat << EOT
+EXAMPLES
+    c8y tedge helper move-child-services gateway001
+    # Check and move child services for a single device with the unique name gateway001
+
+    c8y tedge helper move-child-services 1111 2222 33333
+    # Check and move child services for 3 devices
+
+    c8y devices list --select id -o csv | xargs c8y tedge helper move-child-services
+    # Search for a list of devices and process the matching devices
+EOT
+}
+
+help() {
+    cat << EOT
+Fix services which were assigned to the thin-edge.io device as child devices rather than child services
+due to a bug in thin-edge.io 1.0.0-rc.1 (see https://github.com/thin-edge/thin-edge.io/issues/2584)
+
+This command just removes the child device relationship and replaces it with the child asset relation.
+
+USAGE
+    c8y tedge helper move-child-services <...DEVICE>
+
+ARGUMENTS
+    DEVICE      Managed object id or name (though it must be unique) of the device to check for misplaced services
+
+FLAGS
+  --force, -f                       Don't prompt for confirmation
+  --examples                        Show examples
+  -h, --help                        Show this help
+
+$(examples)
+EOT
+}
+
+# Parse arguments
+POSITIONAL_ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --help|-h)
+            help
+            exit 0
+            ;;
+        --examples)
+            examples
+            exit 0
+            ;;
+        --force|-f)
+            export CI=true
+            exit 0
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+            ;;
+    esac
+    shift
+done
+
+set -- "${POSITIONAL_ARGS[@]}"
+
+move_services() {
+    device_id="$1"
+    MISPLACED_SERVICES=$(c8y devices children list -n --id "$device_id" --childType device -p 100 --filter "name like *service*" --select id -o csv)
+    
+    if [ -z "$MISPLACED_SERVICES" ]; then
+        echo "[device=$device_id] No erroneous services were detected" >&2
+        return
+    fi
+    echo "[device=$device_id] Detected services which are assigned as child devices"
+
+    echo "$MISPLACED_SERVICES" | c8y devices children assign --id "$device_id" --childType addition --silentStatusCodes 409 --silentExit
+    echo "$MISPLACED_SERVICES" | c8y devices children unassign --id "$device_id" --childType device --silentStatusCodes 404 --silentExit
+}
+
+if [ $# -eq 0 ]; then
+    help
+    exit 1
+fi
+
+#
+# Process devices
+#
+while [ $# -gt 0 ]; do
+    move_services "$1"
+    shift
+done
