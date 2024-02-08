@@ -17,7 +17,7 @@ EOT
 
 help() {
     cat << EOT
-Fix services which were misassigned to the thin-edge.io device as child devices rather than child services
+Fix services which were assigned to the thin-edge.io device as child devices rather than child services
 due to a bug in thin-edge.io 1.0.0-rc.1 (see https://github.com/thin-edge/thin-edge.io/issues/2584)
 
 This command just removes the child device relationship and replaces it with the child asset relation.
