@@ -25,7 +25,13 @@ This command just removes the child device relationship and replaces it with the
 USAGE
     c8y tedge helper move-child-services <...DEVICE>
 
+ARGUMENTS
     DEVICE      Managed object id or name (though it must be unique) of the device to check for misplaced services
+
+FLAGS
+  --force, -f                       Don't prompt for confirmation
+  --examples                        Show examples
+  -h, --help                        Show this help
 
 $(examples)
 EOT
