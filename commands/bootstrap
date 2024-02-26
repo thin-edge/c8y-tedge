@@ -5,6 +5,8 @@ TARGET=
 OPEN_WEBSITE=1
 WEBSITE_PAGE="device-info"
 SSH_USER=
+MTLS=0
+ROOT_DEVICE=
 SCAN=${SCAN:-0}
 PATTERN="${PATTERN:-.+}"
 BOOTSTRAP_TYPE="${BOOTSTRAP_TYPE:-}"
@@ -29,6 +31,20 @@ Type: self-signed
 2. Fetch public device certificate and upload it to Cumulocity IoT (private key does not leave the device)
 3. Open the device in the Cumulocity IoT Device Management application
 
+Type: --mtls
+1. Configure the device as a main device and enforce mTLS for all child devices
+2. Create a device-specific signing certificate (if not already done) (stored on the host)
+3. Configure the device to trust its signing certificate (that will be used by all its child-devices)
+4. Create a local certificate for the main device signed by its signing certificate (as the latter will be trusted by all child-devices)
+
+
+Type: --mtls --root-device <ROOT_DEVICE>
+1. Configure the device as a child device and enforce mTLS for all connections to the root device
+2. Create a signing certificate for the root device (if not already done) (stored on the host)
+3. Configure the device to trust its root device signing certificate
+4. Create a local certificate for the child device signed by the root device signing certificate
+
+
 USAGE
   c8y tedge bootstrap <TARGET> [DEVICE_ID]
 
@@ -41,6 +57,8 @@ FLAGS
   --skip-website                    Don't open the Cumulocity IoT Device Management application
   --page <STRING>                   Which Device Management page to open. Defaults to device-info
   --type <local-ca|self-signed>     Certificate signing method. Accepts local-ca (default), self-signed
+  --mtls                            Enable mTLS for all local connections over MQTT and HTTP
+  --root-device <ROOT_DEVICE>       Root device hostname or ip address to connect to via ssh. This is only used when enabling mTLS on a child device.
   --scan                            Bootstrap devices found by a scan
   --pattern <REGEX>                 Only include devices which match the given pattern (only applies when piping or scanning devices)
   --verbose                         Enable verbose logging
@@ -61,6 +79,12 @@ c8y tedge bootstrap root@mydevice.local
 
 # Bootstrap a device via ssh using a self signed certificate
 c8y tedge bootstrap root@mydevice.local --type self-signed
+
+# Bootstrap a device enabling mTLS
+c8y tedge bootstrap root@mydevice.local --mtls
+
+# Bootstrap a child device enabling mTLS
+c8y tedge bootstrap root@my-child-device.local --mtls --root-device root@mydevice.local
 
 # Bootstrap a device via ssh but don't open the website
 c8y tedge bootstrap root@mydevice.local --skip-website
@@ -94,6 +118,13 @@ while [ $# -gt 0 ]; do
             ;;
         --type)
             BOOTSTRAP_TYPE="$2"
+            shift
+            ;;
+        --mtls)
+            ENABLE_MTLS=1
+            ;;
+        --root-device)
+            ROOT_DEVICE="$2"
             shift
             ;;
         --scan)
@@ -297,6 +328,137 @@ create_self_signed() {
     fi
 }
 
+# Create a signing certificate for a main device
+#
+# This certificate is used to sign all the entities related to a main device.
+# It's deployed on the main device and all its child devices (and possibly grand-child devices).
+# It's used to let the child devices authenticate the main device end-points (the local bus, the file transfer service or the c8y proxy).
+# It's used by the main device to authenticate child devices.
+#
+# The associated private key is stored on the host running the `c8y tedge` command - not the main device.
+create_signing_cert() {
+    ROOT_DEVICE_ID=$1
+    if [ -z "$ROOT_DEVICE_ID" ]; then
+        echo "mTLS cannot be enabled without an id for the root device" >&2
+        exit 1
+    fi
+
+    SIGNING_CERT_DIR="${HOME}/.tedge/device-signing-certs"
+    SIGNING_CERT_NAME="${ROOT_DEVICE_ID}-local-ca"
+    SIGNING_CERT_FILE="${SIGNING_CERT_DIR}/${SIGNING_CERT_NAME}.crt"
+    SIGNING_CERT_KEY="${SIGNING_CERT_DIR}/${SIGNING_CERT_NAME}.key"
+    CA_EXPIRE_DAYS="${CA_EXPIRE_DAYS:-365}"
+
+    mkdir -p "$SIGNING_CERT_DIR"
+
+    if [ -f "$SIGNING_CERT_FILE" ] && [ -f "$SIGNING_CERT_KEY=" ]; then
+        echo "Using existing device local CA certificate: $SIGNING_CERT_FILE" >&2
+    else
+        echo "Creating new device local CA certificate: $SIGNING_CERT_FILE" >&2
+        openssl req \
+            -new \
+            -x509 \
+            -days "$CA_EXPIRE_DAYS" \
+            -extensions v3_ca \
+            -nodes \
+            -subj "/O=thin-edge/OU=local-ca/CN=${SIGNING_CERT_NAME}" \
+            -keyout "$SIGNING_CERT_KEY" \
+            -out "$SIGNING_CERT_FILE" >/dev/null 2>&1
+    fi
+
+    # Make the signing certificate trusted by the device
+    scp "$SIGNING_CERT_FILE" "$TARGET:/tmp/${SIGNING_CERT_NAME}.crt"
+    "${EXEC_CMD[@]}" "$TARGET" sudo mv "/tmp/${SIGNING_CERT_NAME}.crt" "/usr/local/share/ca-certificates"
+    "${EXEC_CMD[@]}" "$TARGET" sudo update-ca-certificates
+}
+
+# Create a certificate that is trusted by all the entities attached to a root device
+#
+# This certificate is created on the target device,
+# but signed on the host running the `c8y tedge` command on behalf of the root device.
+create_local_cert() {
+    ROOT_DEVICE_ID=$1
+    SERVICE=$2
+    if [ -z "$ROOT_DEVICE_ID" ]; then
+        echo "mTLS cannot be enabled without an id for the root device" >&2
+        exit 1
+    fi
+    if [ -z "$SERVICE" ]; then
+	SERVICE=main-agent
+    fi
+
+    SIGNING_CERT_DIR="${HOME}/.tedge/device-signing-certs"
+    SIGNING_CERT_NAME="${ROOT_DEVICE_ID}-local-ca"
+    SIGNING_CERT_FILE="${SIGNING_CERT_DIR}/${SIGNING_CERT_NAME}.crt"
+    SIGNING_CERT_KEY="${SIGNING_CERT_DIR}/${SIGNING_CERT_NAME}.key"
+    CA_EXPIRE_DAYS="${CA_EXPIRE_DAYS:-365}"
+
+    LOCAL_CERT_DIR=/etc/tedge/device-certs/local-certs
+    LOCAL_CERT_NAME="${DEVICE_ID}-${SERVICE}"
+    LOCAL_CERT_CSR="${LOCAL_CERT_DIR}/${LOCAL_CERT_NAME}.csr"
+    LOCAL_CERT_FILE="${LOCAL_CERT_DIR}/${LOCAL_CERT_NAME}.crt"
+    LOCAL_CERT_KEY="${LOCAL_CERT_DIR}/${LOCAL_CERT_NAME}.key"
+
+    "${EXEC_CMD[@]}" "$TARGET" mkdir -p "$LOCAL_CERT_DIR"
+
+    if ! "${EXEC_CMD[@]}" "$TARGET" test -f "$LOCAL_CERT_KEY"; then
+        info "Creating device private key"
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO openssl genrsa -out "$LOCAL_CERT_KEY" 2048
+        "${EXEC_CMD[@]}" "$TARGET" sudo chown tedge:root "$LOCAL_CERT_KEY"
+        "${EXEC_CMD[@]}" "$TARGET" sudo chmod 400 "$LOCAL_CERT_KEY"
+    else
+        info "Using existing private key"
+    fi
+
+    # Create Certificate Signing Request (CSR)
+    DEVICE_CSR=$(
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO openssl req \
+            -key "$LOCAL_CERT_KEY" \
+            -new \
+            -subj "/O=thin-edge/OU=${DEVICE_ID}/SN=${SERVICE}/CN=localhost"
+    )
+
+    # Sign the CSR
+    if [ "$SERVICE" = "child-agent" ]; then
+    CERT_EXT=$(cat << EOF
+basicConstraints=CA:FALSE
+extendedKeyUsage = clientAuth
+EOF
+    )
+    else
+    USER="${SSH_USER:-root}"
+    WITHOUT_USER_PREFIX="${USER}@"
+    HOST=${TARGET#"$WITHOUT_USER_PREFIX"}
+    CERT_EXT=$(cat << EOF
+authorityKeyIdentifier=keyid
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyAgreement
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName=DNS:${HOST},DNS:localhost
+EOF
+    )
+    fi
+
+    DEVICE_CERT_CHAIN="/tmp/${LOCAL_CERT_NAME}.crt"
+    openssl x509 -req \
+        -in <(echo "$DEVICE_CSR") \
+        -out "$DEVICE_CERT_CHAIN" \
+        -CA "$SIGNING_CERT_FILE" \
+        -CAkey "$SIGNING_CERT_KEY" \
+        -extfile <(echo "$CERT_EXT") \
+        -CAcreateserial \
+        -days "$LEAF_EXPIRE_DAYS"
+
+    # Build certificate chain (from leaf cert to the signing cert)
+    cat "$SIGNING_CERT_FILE" >> "$DEVICE_CERT_CHAIN"
+
+    # Copy cert to device
+    scp "$DEVICE_CERT_CHAIN" "$TARGET:/tmp/${LOCAL_CERT_NAME}.crt"
+    "${EXEC_CMD[@]}" "$TARGET" sudo mv "/tmp/${LOCAL_CERT_NAME}.crt" "$LOCAL_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" sudo chown tedge:root "$LOCAL_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" sudo chmod 644 "$LOCAL_CERT_FILE"
+}
+
 get_device_id() {
     # Get identity (stop on first non empty value)
     target="$1"
@@ -403,6 +565,24 @@ do_action() {
                 exit 1
                 ;;
     esac
+
+    if [ "$ENABLE_MTLS" = "1" ]; then
+        if ! command -V openssl >/dev/null 2>&1; then
+            echo "Missing dependency: openssl is not installed" >&2
+            exit 1
+        fi
+        if [ -z "$ROOT_DEVICE" ]; then
+            # enabling mTLS on the main device
+            create_signing_cert "$DEVICE_ID"
+            create_local_cert "$DEVICE_ID" main-agent
+            create_local_cert "$DEVICE_ID" c8y-mapper
+        else
+            # enabling mTLS on a child device
+	    ROOT_DEVICE_ID=$(get_device_id "$ROOT_DEVICE")
+	    create_signing_cert "$ROOT_DEVICE_ID"
+            create_local_cert "$ROOT_DEVICE_ID" child-agent
+        fi
+    fi
 
     # Wait for certificate to be enabled
     if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y --test >/dev/null 2>&1; then
