@@ -3,6 +3,7 @@ set -e
 DEVICE_ID=
 TARGET=
 OPEN_WEBSITE=1
+RENEW_CERT=1
 WEBSITE_PAGE="device-info"
 SSH_USER=
 MTLS=0
@@ -54,6 +55,7 @@ ARGUMENTS
                       has not already been bootstrapped.
 
 FLAGS
+  --skip-renew-cert                 Don't update the certificate of an already connected device
   --skip-website                    Don't open the Cumulocity IoT Device Management application
   --page <STRING>                   Which Device Management page to open. Defaults to device-info
   --type <local-ca|self-signed>     Certificate signing method. Accepts local-ca (default), self-signed
@@ -147,6 +149,9 @@ while [ $# -gt 0 ]; do
             ;;
         --skip-website)
             OPEN_WEBSITE=0
+            ;;
+        --skip-renew-cert)
+            RENEW_CERT=0
             ;;
         *)
             if [ -z "$TARGET" ]; then
@@ -384,7 +389,7 @@ create_local_cert() {
         exit 1
     fi
     if [ -z "$SERVICE" ]; then
-	SERVICE=main-agent
+        SERVICE=main-agent
     fi
 
     SIGNING_CERT_DIR="${HOME}/.tedge/device-signing-certs"
@@ -523,17 +528,6 @@ do_action() {
         URL=$(c8y sessions get --select host -o csv | sed -E 's|https?://||')
     fi
 
-    # Disconnect if tedge is already connected
-    # Note: Check if the mapper is configured or not but it can't be assumed that it is successfully configured
-    EXISTING_C8Y_URL=$("${EXEC_CMD[@]}" "$TARGET" tedge config get c8y.url 2>/dev/null ||:)
-    if [ -n "$EXISTING_C8Y_URL" ]; then
-        # TODO: Add option to abort if already bootstrapped (to prevent accidental)
-        echo "tedge is already connected, so disconnecting before bootstrapping" >&2
-        "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge disconnect c8y ||:
-    fi
-
-    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.url "$URL"
-
     # Get identity
     DEVICE_ID=$(get_device_id "$TARGET" "$DEVICE_ID")
     if [ -z "$DEVICE_ID" ]; then
@@ -541,23 +535,37 @@ do_action() {
         exit 1
     fi
 
-    case "$BOOTSTRAP_TYPE" in
-            self-signed)
-                create_self_signed
-                ;;
-            local-ca)
-                if ! command -V openssl >/dev/null 2>&1; then
-                    echo "Missing dependency: openssl is not installed" >&2
-                    exit 1
-                fi
-                create_ca
-                create_remote_cert
-                ;;
-            *)
-                echo "Unknown bootstrapping method" >&2
-                exit 1
-                ;;
-    esac
+    # Disconnect if tedge is already connected
+    # Note: Check if the mapper is configured or not but it can't be assumed that it is successfully configured
+    EXISTING_C8Y_URL=$("${EXEC_CMD[@]}" "$TARGET" tedge config get c8y.url 2>/dev/null ||:)
+    if [ -n "$EXISTING_C8Y_URL" ]; then
+        if [ "$RENEW_CERT" = 0 ]; then
+            echo "tedge is already connected, skipping certificate generation" >&2
+        else
+            echo "tedge is already connected, so disconnecting before bootstrapping" >&2
+            "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge disconnect c8y ||:
+            "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.url "$URL"
+
+            case "$BOOTSTRAP_TYPE" in
+                    self-signed)
+                        create_self_signed
+                        ;;
+                    local-ca)
+                        if ! command -V openssl >/dev/null 2>&1; then
+                            echo "Missing dependency: openssl is not installed" >&2
+                            exit 1
+                        fi
+                        create_ca
+                        create_remote_cert
+                        ;;
+                    *)
+                        echo "Unknown bootstrapping method" >&2
+                        exit 1
+                        ;;
+            esac
+        fi
+    fi
+
 
     if [ "$ENABLE_MTLS" = "1" ]; then
         if ! command -V openssl >/dev/null 2>&1; then
@@ -571,8 +579,8 @@ do_action() {
             create_local_cert "$DEVICE_ID" c8y-mapper
         else
             # enabling mTLS on a child device
-	    ROOT_DEVICE_ID=$(get_device_id "$ROOT_DEVICE")
-	    create_signing_cert "$ROOT_DEVICE_ID"
+            ROOT_DEVICE_ID=$(get_device_id "$ROOT_DEVICE")
+            create_signing_cert "$ROOT_DEVICE_ID"
             create_local_cert "$ROOT_DEVICE_ID" child-agent
         fi
     fi
