@@ -530,13 +530,6 @@ do_action() {
         # TODO: Add option to abort if already bootstrapped (to prevent accidental)
         echo "tedge is already connected, so disconnecting before bootstrapping" >&2
         "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge disconnect c8y ||:
-
-        # Clear some existing state
-        # FIXME: Remove once the following are resolved
-        # * https://github.com/thin-edge/thin-edge.io/issues/2584
-        # * https://github.com/thin-edge/thin-edge.io/issues/2606
-        "${EXEC_CMD[@]}" "$TARGET" $SUDO systemctl stop mosquitto tedge-agent
-        "${EXEC_CMD[@]}" "$TARGET" $SUDO rm -f /var/lib/mosquitto/mosquitto.db /etc/tedge/.tedge-mapper-c8y/entity_store.jsonl /data/mosquitto/mosquitto.db
     fi
 
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.url "$URL"
