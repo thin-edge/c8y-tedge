@@ -371,10 +371,17 @@ create_signing_cert() {
             -out "$SIGNING_CERT_FILE" >/dev/null 2>&1
     fi
 
-    # Make the signing certificate trusted by the device
+    # Upload the signing CA on the target
+    LOCAL_CERT_DIR=/etc/tedge/device-certs/local-certs
+    LOCAL_SIGNING_CERT_FILE="${LOCAL_CERT_DIR}/${SIGNING_CERT_NAME}.crt"
+
     "${SCP_CMD}" "$SIGNING_CERT_FILE" "$TARGET" "/tmp/${SIGNING_CERT_NAME}.crt"
-    "${EXEC_CMD[@]}" "$TARGET" sudo mv "/tmp/${SIGNING_CERT_NAME}.crt" "/usr/local/share/ca-certificates"
-    "${EXEC_CMD[@]}" "$TARGET" sudo update-ca-certificates
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mkdir -p "$LOCAL_CERT_DIR"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mv "/tmp/${SIGNING_CERT_NAME}.crt" "$LOCAL_SIGNING_CERT_FILE"
+
+    # Make the signing certificate trusted by the device
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" cp "$LOCAL_SIGNING_CERT_FILE" "/usr/local/share/ca-certificates"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" update-ca-certificates
 }
 
 # Create a certificate that is trusted by all the entities attached to a main device
@@ -414,6 +421,7 @@ create_local_cert() {
     LOCAL_CERT_CSR="${LOCAL_CERT_DIR}/${LOCAL_CERT_NAME}.csr"
     LOCAL_CERT_FILE="${LOCAL_CERT_DIR}/${LOCAL_CERT_NAME}.crt"
     LOCAL_CERT_KEY="${LOCAL_CERT_DIR}/${LOCAL_CERT_NAME}.key"
+    LOCAL_SIGNING_CERT_FILE="${LOCAL_CERT_DIR}/${SIGNING_CERT_NAME}.crt"
 
     "${EXEC_CMD[@]}" "$TARGET" mkdir -p "$LOCAL_CERT_DIR"
 
@@ -472,7 +480,11 @@ EOF
     "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 644 "$LOCAL_CERT_FILE"
 
     case "$SERVICE" in
+        mqtt-broker)
+            configure_mtls_mqtt_broker "$TARGET_IP" "$TARGET_DNS" "$LOCAL_SIGNING_CERT_FILE" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
+            ;;
         main-agent)
+            configure_mtls_mqtt_client "$TARGET_IP" "$TARGET_DNS" "$LOCAL_SIGNING_CERT_FILE" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
             configure_mtls_main_agent "$TARGET_IP" "$TARGET_DNS" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
             ;;
         c8y-mapper)
@@ -488,6 +500,7 @@ EOF
             if [ -z "$MAIN_DEVICE_IP" ]; then
                 MAIN_DEVICE_IP=$(echo "$MAIN_DEVICE" | sed -E 's/.*@(\S+)/\1/')
             fi
+            configure_mtls_mqtt_client "$MAIN_DEVICE_IP" "$MAIN_DEVICE_DNS" "$LOCAL_SIGNING_CERT_FILE" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
             configure_mtls_child_agent "$MAIN_DEVICE_IP" "$MAIN_DEVICE_DNS" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
             ;;
         *)
@@ -510,7 +523,7 @@ configure_mtls_main_agent() {
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.ca_path /etc/ssl/certs
 
     # tedge-agent is a client of c8y-proxy	
-    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.client.host "$TARGET_DNS"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.client.host "$TARGET_IP"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.client.port "8001"
 
     # apply the new config
@@ -532,7 +545,7 @@ configure_mtls_c8y_mapper() {
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.ca_path /etc/ssl/certs
 
     # c8y-mapper is a client of file-transfer
-    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.host "$TARGET_DNS"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.host "$TARGET_IP"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.port "8000"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.auth.cert_file "$LOCAL_CERT_FILE"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.auth.key_file "$LOCAL_CERT_KEY"
@@ -549,11 +562,11 @@ configure_mtls_child_agent() {
     LOCAL_CERT_KEY="$4"
 
     # child_agent is a client of c8y-proxy	
-    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.client.host "$MAIN_DEVICE_DNS"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.client.host "$MAIN_DEVICE_IP"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.client.port "8001"
 
     # child_agent is a client of file-transfer
-    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.host "$MAIN_DEVICE_DNS"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.host "$MAIN_DEVICE_IP"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.port "8000"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.auth.cert_file "$LOCAL_CERT_FILE"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.auth.key_file "$LOCAL_CERT_KEY"
@@ -563,6 +576,88 @@ configure_mtls_child_agent() {
     "${EXEC_CMD[@]}" "$TARGET" $SUDO systemctl restart tedge-agent
 }
 
+# configure mosquitto on the main device
+configure_mtls_mqtt_broker() {
+    TARGET_IP="$1"
+    TARGET_DNS="$2"
+    SIGNING_CERT_FILE="$3"
+    LOCAL_CERT_FILE="$4"
+    LOCAL_CERT_KEY="$5"
+
+    ## Move under /etc/mosquitto/ca_certificates/ all the mosquitto related certificates
+
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" cp "$SIGNING_CERT_FILE" /etc/mosquitto/ca_certificates/
+    SIGNING_CERT_FILE="/etc/mosquitto/ca_certificates/$(basename $SIGNING_CERT_FILE)"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 444 "$SIGNING_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chown mosquitto:mosquitto "$SIGNING_CERT_FILE"
+
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mv "$LOCAL_CERT_FILE" /etc/mosquitto/ca_certificates/
+    LOCAL_CERT_FILE="/etc/mosquitto/ca_certificates/$(basename $LOCAL_CERT_FILE)"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 444 "$LOCAL_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chown mosquitto:mosquitto "$LOCAL_CERT_FILE"
+
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mv "$LOCAL_CERT_KEY" /etc/mosquitto/ca_certificates/
+    LOCAL_CERT_KEY="/etc/mosquitto/ca_certificates/$(basename $LOCAL_CERT_KEY)"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 400 "$LOCAL_CERT_KEY"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chown mosquitto:mosquitto "$LOCAL_CERT_KEY"
+
+    ## FIXME: For now nothing is changed on the host itself (so other tools, such as collectd, can connect as before)
+    ##
+    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.bind.address "127.0.0.1"
+    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.host "127.O.0.1"
+
+    ## FIXME: Mosquitto configuration generated with `mqtt.external` is incorrect
+    ##        see https://github.com/thin-edge/thin-edge.io/issues/2740
+    ##
+    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.external.bind.address "$TARGET_IP"
+    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.external.bind.port 1883
+    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.external.ca_path "$SIGNING_CERT_FILE"
+    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.external.cert_file "$LOCAL_CERT_FILE"
+    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.external.key_file "$LOCAL_CERT_KEY"
+
+    ## As a workaround the configuration for external settings is created independently without `tedge`
+
+    cat << EOF >"/tmp/${DEVICE_ID}-tls-listener.conf"
+listener 8883 ${TARGET_IP}
+allow_anonymous false
+require_certificate true
+use_identity_as_username true
+use_username_as_clientid false
+cafile ${SIGNING_CERT_FILE}
+certfile ${LOCAL_CERT_FILE}
+keyfile ${LOCAL_CERT_KEY}
+EOF
+
+    "${SCP_CMD}" "/tmp/${DEVICE_ID}-tls-listener.conf" "$TARGET" "/tmp/tls-listener.conf"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mv "/tmp/tls-listener.conf" /etc/mosquitto/conf.d
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chown mosquitto:mosquitto /etc/mosquitto/conf.d/tls-listener.conf
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 644 /etc/mosquitto/conf.d/tls-listener.conf
+
+    # apply the new config
+    echo "Restart mosquitto on ${TARGET_DNS}" >&2
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO systemctl restart mosquitto
+}
+
+# configure mqtt on a child device
+configure_mtls_mqtt_client() {
+    TARGET_IP="$1"
+    TARGET_DNS="$2"
+    SIGNING_CERT_FILE="$3"
+    LOCAL_CERT_FILE="$4"
+    LOCAL_CERT_KEY="$5"
+
+    if [ -z "$MAIN_DEVICE" ]; then
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.device_topic_id "device/main//"
+    else
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.device_topic_id "device/$DEVICE_ID//"
+    fi
+
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.host "$TARGET_IP"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.port 8883
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.auth.ca_file "$SIGNING_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.auth.cert_file "$LOCAL_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.auth.key_file "$LOCAL_CERT_KEY"
+}
 
 get_device_id() {
     # Get identity (stop on first non empty value)
@@ -684,6 +779,7 @@ do_action() {
         if [ -z "$MAIN_DEVICE" ]; then
             # enabling mTLS on the main device
             create_signing_cert "$DEVICE_ID"
+            create_local_cert "$DEVICE_ID" mqtt-broker
             create_local_cert "$DEVICE_ID" main-agent
             create_local_cert "$DEVICE_ID" c8y-mapper
         else
@@ -694,14 +790,14 @@ do_action() {
     fi
 
     # Wait for certificate to be enabled
-    if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y --test >/dev/null 2>&1; then
+    if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge reconnect c8y --test >/dev/null 2>&1; then
         sleep 2
 
         attempt=0
         max_attempts=10
         success=0
         while [ "$attempt" -lt "$max_attempts" ]; do
-            if "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y; then
+            if "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge reconnect c8y; then
                 success=1
                 break
             fi
