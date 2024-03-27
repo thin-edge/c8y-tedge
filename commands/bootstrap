@@ -788,7 +788,7 @@ do_action() {
     fi
 
     # Wait for certificate to be enabled
-    if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge reconnect c8y --test >/dev/null 2>&1; then
+    if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y --test >/dev/null 2>&1; then
         sleep 2
 
         attempt=0
