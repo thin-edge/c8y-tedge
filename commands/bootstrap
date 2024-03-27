@@ -403,7 +403,7 @@ create_local_cert() {
     if [ -z "$TARGET_DNS" ]; then
         TARGET_DNS=$(echo "$TARGET" | sed -E 's/.*@(\S+)/\1/')
     fi
-    TARGET_IP=$("${EXEC_CMD[@]}" "$TARGET" ip route get 8.8.8.8 2>/dev/null | sed -E 's/.*src (\S+) .*/\1/;t;d' 2>/dev/null || true)
+    TARGET_IP=$("${EXEC_CMD[@]}" "$TARGET" "ip route get 8.8.8.8 2>/dev/null | sed -E 's/.*src (\S+) .*/\1/;t;d' 2>/dev/null || true")
     if [ -z "$TARGET_IP" ]; then
         TARGET_IP=$(echo "$TARGET" | sed -E 's/.*@(\S+)/\1/')
     fi
@@ -494,7 +494,7 @@ EOF
             if [ -z "$MAIN_DEVICE_DNS" ]; then
                 MAIN_DEVICE_DNS=$(echo "$MAIN_DEVICE" | sed -E 's/.*@(\S+)/\1/')
             fi
-            MAIN_DEVICE_IP=$("${EXEC_CMD[@]}" "$MAIN_DEVICE" ip route get 8.8.8.8 2>/dev/null | sed -E 's/.*src (\S+) .*/\1/;t;d' 2>/dev/null || true)
+            MAIN_DEVICE_IP=$("${EXEC_CMD[@]}" "$MAIN_DEVICE" "ip route get 8.8.8.8 2>/dev/null | sed -E 's/.*src (\S+) .*/\1/;t;d' 2>/dev/null || true")
             if [ -z "$MAIN_DEVICE_IP" ]; then
                 MAIN_DEVICE_IP=$(echo "$MAIN_DEVICE" | sed -E 's/.*@(\S+)/\1/')
             fi
