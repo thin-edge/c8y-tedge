@@ -585,17 +585,17 @@ configure_mtls_mqtt_broker() {
     ## Move under /etc/mosquitto/ca_certificates/ all the mosquitto related certificates
 
     "${EXEC_CMD[@]}" "$TARGET" "$SUDO" cp "$SIGNING_CERT_FILE" /etc/mosquitto/ca_certificates/
-    SIGNING_CERT_FILE="/etc/mosquitto/ca_certificates/$(basename $SIGNING_CERT_FILE)"
+    SIGNING_CERT_FILE="/etc/mosquitto/ca_certificates/$(basename "$SIGNING_CERT_FILE")"
     "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 444 "$SIGNING_CERT_FILE"
     "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chown mosquitto:mosquitto "$SIGNING_CERT_FILE"
 
     "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mv "$LOCAL_CERT_FILE" /etc/mosquitto/ca_certificates/
-    LOCAL_CERT_FILE="/etc/mosquitto/ca_certificates/$(basename $LOCAL_CERT_FILE)"
+    LOCAL_CERT_FILE="/etc/mosquitto/ca_certificates/$(basename "$LOCAL_CERT_FILE")"
     "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 444 "$LOCAL_CERT_FILE"
     "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chown mosquitto:mosquitto "$LOCAL_CERT_FILE"
 
     "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mv "$LOCAL_CERT_KEY" /etc/mosquitto/ca_certificates/
-    LOCAL_CERT_KEY="/etc/mosquitto/ca_certificates/$(basename $LOCAL_CERT_KEY)"
+    LOCAL_CERT_KEY="/etc/mosquitto/ca_certificates/$(basename "$LOCAL_CERT_KEY")"
     "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 400 "$LOCAL_CERT_KEY"
     "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chown mosquitto:mosquitto "$LOCAL_CERT_KEY"
 
