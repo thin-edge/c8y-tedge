@@ -768,7 +768,7 @@ do_action() {
         fi
     fi
 
-
+    IS_MAIN_DEVICE=1
     if [ "$ENABLE_MTLS" = "1" ]; then
         if ! command -V openssl >/dev/null 2>&1; then
             echo "Missing dependency: openssl is not installed" >&2
@@ -784,36 +784,42 @@ do_action() {
             # enabling mTLS on a child devicez
             create_signing_cert "$MAIN_DEVICE_ID"
             create_local_cert "$MAIN_DEVICE_ID" child-agent
+
+            # Don't run tedge reconnect for a child device
+            IS_MAIN_DEVICE=0
         fi
     fi
 
-    # Wait for certificate to be enabled
-    if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y --test >/dev/null 2>&1; then
-        sleep 2
+    # Only run when bootstrapping the main device
+    if [ "$IS_MAIN_DEVICE" = 1 ]; then
+        # Wait for certificate to be enabled
+        if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y --test >/dev/null 2>&1; then
+            sleep 2
 
-        attempt=0
-        max_attempts=10
-        success=0
-        while [ "$attempt" -lt "$max_attempts" ]; do
-            if "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge reconnect c8y; then
-                success=1
-                break
+            attempt=0
+            max_attempts=10
+            success=0
+            while [ "$attempt" -lt "$max_attempts" ]; do
+                if "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge reconnect c8y; then
+                    success=1
+                    break
+                fi
+
+                echo "Connection failed. Trying again in 5 seconds" >&2
+                sleep 5
+            done
+
+            if [ "$success" = "1" ]; then
+                echo "Successfully bootstrapped device" >&2
+            else
+                echo "Bootstrapping failed. Please check the console output for more details" >&2
             fi
-
-            echo "Connection failed. Trying again in 5 seconds" >&2
-            sleep 5
-        done
-
-        if [ "$success" = "1" ]; then
-            echo "Successfully bootstrapped device" >&2
-        else
-            echo "Bootstrapping failed. Please check the console output for more details" >&2
         fi
-    fi
 
-    # Open device management page for the device
-    if [ "$OPEN_WEBSITE" = 1 ]; then
-        c8y identity get -n --name "$DEVICE_ID" | c8y applications open --application devicemanagement --page "$WEBSITE_PAGE"
+        # Open device management page for the device
+        if [ "$OPEN_WEBSITE" = 1 ]; then
+            c8y identity get -n --name "$DEVICE_ID" | c8y applications open --application devicemanagement --page "$WEBSITE_PAGE"
+        fi
     fi
 }
 
