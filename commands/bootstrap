@@ -640,8 +640,9 @@ configure_mtls_mqtt_broker() {
 
     ## FIXME: For now nothing is changed on the host itself (so other tools, such as collectd, can connect as before)
     ##
-    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.bind.address "127.0.0.1"
-    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.host "127.O.0.1"
+    # Unset previously set bind address/port in cases users had previously set it to 0.0.0.0
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config unset mqtt.bind.address
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config unset mqtt.bind.port
 
     ## FIXME: Mosquitto configuration generated with `mqtt.external` is incorrect
     ##        see https://github.com/thin-edge/thin-edge.io/issues/2740
