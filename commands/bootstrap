@@ -190,6 +190,11 @@ error() {
     printf "%s\tINFO\t%s" "$(date -Iseconds || true)" "$@" >&2
 }
 
+is_ip_address() {
+    # TODO: Support IPV6 addresses
+    [[ "$1" =~ ^[0-9][0-9]?[0-9]?+\.[0-9][0-9]?[0-9]?+\.[0-9][0-9]?[0-9]?+\.[0-9][0-9]?[0-9]?+$ ]]
+}
+
 CA_CERT_FILE="${CA_CERT_FILE:-$HOME/tedge-ca.crt}"
 CA_CERT_KEY="${CA_CERT_KEY:-$HOME/tedge-ca.key}"
 LEAF_EXPIRE_DAYS=365
@@ -259,13 +264,23 @@ create_remote_cert() {
     "${EXEC_CMD[@]}" "$TARGET" $SUDO chown mosquitto:root "$DEVICE_KEY_PATH"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO chmod 600 "$DEVICE_KEY_PATH"
 
+    SUBJECT_ALT_NAMES="DNS:localhost,IP:127.0.0.1"
+    if [ -n "$TARGET" ]; then
+        TARGET_WITHOUT_USER="${TARGET//*@/}"
+        if is_ip_address "$TARGET_WITHOUT_USER"; then
+            SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,IP:$TARGET_WITHOUT_USER"
+        else
+            SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,DNS:$TARGET_WITHOUT_USER"
+        fi
+    fi
+
     # Sign the CSR
     CERT_EXT=$(cat << EOF
 authorityKeyIdentifier=keyid
 basicConstraints=CA:FALSE
 keyUsage = digitalSignature, keyAgreement
 extendedKeyUsage = serverAuth, clientAuth
-subjectAltName=DNS:${TARGET},DNS:localhost
+subjectAltName=${SUBJECT_ALT_NAMES}
 EOF
     )
 
@@ -399,13 +414,22 @@ create_local_cert() {
     fi
 
     # Prepare required info for subjectAltName
-    TARGET_DNS=$("${EXEC_CMD[@]}" "$TARGET" hostname 2>/dev/null || true)
-    if [ -z "$TARGET_DNS" ]; then
-        TARGET_DNS=$(echo "$TARGET" | sed -E 's/.*@(\S+)/\1/')
+    TARGET_DNS=
+    TARGET_IP=
+    TARGET_WITHOUT_USER="${TARGET//*@/}"
+
+    if is_ip_address "$TARGET_WITHOUT_USER"; then
+        TARGET_IP="$TARGET_WITHOUT_USER"
+    else
+        TARGET_DNS="$TARGET_WITHOUT_USER"
     fi
-    TARGET_IP=$("${EXEC_CMD[@]}" "$TARGET" "ip route get 8.8.8.8 2>/dev/null | sed -E 's/.*src (\S+) .*/\1/;t;d' 2>/dev/null || true")
+
+    if [ -z "$TARGET_DNS" ]; then
+        TARGET_DNS=$("${EXEC_CMD[@]}" "$TARGET" hostname 2>/dev/null || true)
+    fi
+
     if [ -z "$TARGET_IP" ]; then
-        TARGET_IP=$(echo "$TARGET" | sed -E 's/.*@(\S+)/\1/')
+        TARGET_IP=$("${EXEC_CMD[@]}" "$TARGET" "ip route get 8.8.8.8 2>/dev/null | sed -E 's/.*src (\S+) .*/\1/;t;d' 2>/dev/null || true")
     fi
 
     # Prepare cert files
@@ -442,18 +466,25 @@ create_local_cert() {
 
     # Sign the CSR
     if [ "$SERVICE" = "child-agent" ]; then
-    CERT_EXT=$(cat << EOF
+        CERT_EXT=$(cat << EOF
 basicConstraints=CA:FALSE
 extendedKeyUsage = clientAuth
 EOF
     )
     else
-    CERT_EXT=$(cat << EOF
+        SUBJECT_ALT_NAMES="DNS:localhost,IP:127.0.0.1"
+        if [ -n "$TARGET_IP" ]; then
+            SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,IP:$TARGET_IP"
+        fi
+        if [ -n "$TARGET_DNS" ]; then
+            SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,DNS:$TARGET_DNS"
+        fi
+        CERT_EXT=$(cat << EOF
 authorityKeyIdentifier=keyid
 basicConstraints=CA:FALSE
 keyUsage = digitalSignature, keyAgreement
 extendedKeyUsage = serverAuth, clientAuth
-subjectAltName = DNS:${TARGET_DNS},IP:${TARGET_IP},DNS:localhost,IP:127.0.0.1
+subjectAltName = ${SUBJECT_ALT_NAMES}
 EOF
     )
     fi
@@ -489,14 +520,22 @@ EOF
             configure_mtls_c8y_mapper "$TARGET_IP" "$TARGET_DNS" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
             ;;
         child-agent)
-	    # GET IP and DNS of the main device
-	    MAIN_DEVICE_DNS=$("${EXEC_CMD[@]}" "$MAIN_DEVICE" hostname 2>/dev/null || true)
-            if [ -z "$MAIN_DEVICE_DNS" ]; then
-                MAIN_DEVICE_DNS=$(echo "$MAIN_DEVICE" | sed -E 's/.*@(\S+)/\1/')
+	        # GET IP and DNS of the main device
+            MAIN_DEVICE_IP=
+            MAIN_DEVICE_DNS=
+            MAIN_DEVICE_WITHOUT_USER="${MAIN_DEVICE//*@/}"
+
+            if is_ip_address "$$MAIN_DEVICE_WITHOUT_USER"; then
+                MAIN_DEVICE_IP="$MAIN_DEVICE_WITHOUT_USER"
+            else
+                MAIN_DEVICE_DNS="$MAIN_DEVICE_WITHOUT_USER"
             fi
-            MAIN_DEVICE_IP=$("${EXEC_CMD[@]}" "$MAIN_DEVICE" "ip route get 8.8.8.8 2>/dev/null | sed -E 's/.*src (\S+) .*/\1/;t;d' 2>/dev/null || true")
+
+            if [ -z "$MAIN_DEVICE_DNS" ]; then
+                MAIN_DEVICE_DNS=$("${EXEC_CMD[@]}" "$MAIN_DEVICE" hostname 2>/dev/null || true)
+            fi
             if [ -z "$MAIN_DEVICE_IP" ]; then
-                MAIN_DEVICE_IP=$(echo "$MAIN_DEVICE" | sed -E 's/.*@(\S+)/\1/')
+                MAIN_DEVICE_IP=$("${EXEC_CMD[@]}" "$MAIN_DEVICE" "ip route get 8.8.8.8 2>/dev/null | sed -E 's/.*src (\S+) .*/\1/;t;d' 2>/dev/null || true")
             fi
             configure_mtls_mqtt_client "$MAIN_DEVICE_IP" "$MAIN_DEVICE_DNS" "$LOCAL_SIGNING_CERT_FILE" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
             configure_mtls_child_agent "$MAIN_DEVICE_IP" "$MAIN_DEVICE_DNS" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
