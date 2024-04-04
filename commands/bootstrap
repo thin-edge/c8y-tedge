@@ -687,9 +687,13 @@ configure_mtls_mqtt_client() {
     if [ -z "$MAIN_DEVICE" ]; then
         "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.device_topic_id "device/main//"
     else
+        # TODO: Should other services be stopped/disabled on a child device automatically
+        # (in case the device was previously setup with thin-edge.io main device installed)
         "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.device_topic_id "device/$DEVICE_ID//"
     fi
 
+    # TODO: Support using a hostname once https://github.com/thin-edge/thin-edge.io/issues/2803 is resolved
+    # to be more flexible if the ip address changes over time (e.g. DHCP)
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.host "$TARGET_IP"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.port 8883
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.auth.ca_file "$SIGNING_CERT_FILE"
