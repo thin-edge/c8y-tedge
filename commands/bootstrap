@@ -3,8 +3,10 @@ set -e
 DEVICE_ID=
 TARGET=
 OPEN_WEBSITE=1
+RENEW_CERT=1
 WEBSITE_PAGE="device-info"
 SSH_USER=
+MAIN_DEVICE=
 SCAN=${SCAN:-0}
 PATTERN="${PATTERN:-.+}"
 BOOTSTRAP_TYPE="${BOOTSTRAP_TYPE:-}"
@@ -29,6 +31,20 @@ Type: self-signed
 2. Fetch public device certificate and upload it to Cumulocity IoT (private key does not leave the device)
 3. Open the device in the Cumulocity IoT Device Management application
 
+Type: --mtls
+1. Configure the device as a main device and enforce mTLS for all child devices
+2. Create a device-specific signing certificate (if not already done) (stored on the host)
+3. Configure the device to trust its signing certificate (that will be used by all its child-devices)
+4. Create a local certificate for the main device signed by its signing certificate (as the latter will be trusted by all child-devices)
+
+
+Type: --mtls --main-device <MAIN_DEVICE>
+1. Configure the device as a child device and enforce mTLS for all connections to the main device
+2. Create a signing certificate for the main device (if not already done) (stored on the host)
+3. Configure the device to trust its main device signing certificate
+4. Create a local certificate for the child device signed by the main device signing certificate
+
+
 USAGE
   c8y tedge bootstrap <TARGET> [DEVICE_ID]
 
@@ -38,9 +54,12 @@ ARGUMENTS
                       has not already been bootstrapped.
 
 FLAGS
+  --skip-renew-cert                 Don't update the certificate of an already connected device
   --skip-website                    Don't open the Cumulocity IoT Device Management application
   --page <STRING>                   Which Device Management page to open. Defaults to device-info
   --type <local-ca|self-signed>     Certificate signing method. Accepts local-ca (default), self-signed
+  --mtls                            Enable mTLS for all local connections over MQTT and HTTP
+  --main-device <MAIN_DEVICE>       Main device hostname or ip address to connect to via ssh. This is only used when enabling mTLS on a child device.
   --scan                            Bootstrap devices found by a scan
   --pattern <REGEX>                 Only include devices which match the given pattern (only applies when piping or scanning devices)
   --verbose                         Enable verbose logging
@@ -61,6 +80,12 @@ c8y tedge bootstrap root@mydevice.local
 
 # Bootstrap a device via ssh using a self signed certificate
 c8y tedge bootstrap root@mydevice.local --type self-signed
+
+# Bootstrap a device enabling mTLS
+c8y tedge bootstrap root@mydevice.local --mtls
+
+# Bootstrap a child device enabling mTLS
+c8y tedge bootstrap root@my-child-device.local --mtls --main-device root@mydevice.local
 
 # Bootstrap a device via ssh but don't open the website
 c8y tedge bootstrap root@mydevice.local --skip-website
@@ -96,6 +121,13 @@ while [ $# -gt 0 ]; do
             BOOTSTRAP_TYPE="$2"
             shift
             ;;
+        --mtls)
+            ENABLE_MTLS=1
+            ;;
+        --main-device)
+            MAIN_DEVICE="$2"
+            shift
+            ;;
         --scan)
             SCAN=1
             ;;
@@ -116,6 +148,9 @@ while [ $# -gt 0 ]; do
             ;;
         --skip-website)
             OPEN_WEBSITE=0
+            ;;
+        --skip-renew-cert)
+            RENEW_CERT=0
             ;;
         *)
             if [ -z "$TARGET" ]; then
@@ -153,6 +188,11 @@ info() {
 
 error() {
     printf "%s\tINFO\t%s" "$(date -Iseconds || true)" "$@" >&2
+}
+
+is_ip_address() {
+    # TODO: Support IPV6 addresses
+    [[ "$1" =~ ^[0-9][0-9]?[0-9]?+\.[0-9][0-9]?[0-9]?+\.[0-9][0-9]?[0-9]?+\.[0-9][0-9]?[0-9]?+$ ]]
 }
 
 CA_CERT_FILE="${CA_CERT_FILE:-$HOME/tedge-ca.crt}"
@@ -224,13 +264,23 @@ create_remote_cert() {
     "${EXEC_CMD[@]}" "$TARGET" $SUDO chown mosquitto:root "$DEVICE_KEY_PATH"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO chmod 600 "$DEVICE_KEY_PATH"
 
+    SUBJECT_ALT_NAMES="DNS:localhost,IP:127.0.0.1"
+    if [ -n "$TARGET" ]; then
+        TARGET_WITHOUT_USER="${TARGET//*@/}"
+        if is_ip_address "$TARGET_WITHOUT_USER"; then
+            SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,IP:$TARGET_WITHOUT_USER"
+        else
+            SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,DNS:$TARGET_WITHOUT_USER"
+        fi
+    fi
+
     # Sign the CSR
     CERT_EXT=$(cat << EOF
 authorityKeyIdentifier=keyid
 basicConstraints=CA:FALSE
 keyUsage = digitalSignature, keyAgreement
 extendedKeyUsage = serverAuth, clientAuth
-subjectAltName=DNS:${TARGET},DNS:localhost
+subjectAltName=${SUBJECT_ALT_NAMES}
 EOF
     )
 
@@ -248,7 +298,7 @@ EOF
     cat "$CA_CERT_FILE" >> "$DEVICE_CERT_CHAIN"
 
     # Copy cert to device
-    scp "$DEVICE_CERT_CHAIN" "$TARGET:/tmp/${DEVICE_ID}.crt"
+    "${SCP_CMD}" "$DEVICE_CERT_CHAIN" "$TARGET" "/tmp/${DEVICE_ID}.crt"
     "${EXEC_CMD[@]}" "$TARGET" sudo mv "/tmp/${DEVICE_ID}.crt" "$DEVICE_CERT_PATH"
     "${EXEC_CMD[@]}" "$TARGET" sudo chown mosquitto:root "$DEVICE_CERT_PATH"
     "${EXEC_CMD[@]}" "$TARGET" sudo chmod 644 "$DEVICE_CERT_PATH"
@@ -297,6 +347,360 @@ create_self_signed() {
     fi
 }
 
+# Create a signing certificate for a main device
+#
+# This certificate is used to sign all the entities related to a main device.
+# It's deployed on the main device and all its child devices (and possibly grand-child devices).
+# It's used to let the child devices authenticate the main device end-points (the local bus, the file transfer service or the c8y proxy).
+# It's used by the main device to authenticate child devices.
+#
+# The associated private key is stored on the host running the `c8y tedge` command - not the main device.
+create_signing_cert() {
+    MAIN_DEVICE_ID=$1
+    if [ -z "$MAIN_DEVICE_ID" ]; then
+        echo "mTLS cannot be enabled without an id for the main device" >&2
+        exit 1
+    fi
+
+    SIGNING_CERT_DIR="${HOME}/.tedge/device-signing-certs"
+    SIGNING_CERT_NAME="${MAIN_DEVICE_ID}-local-ca"
+    SIGNING_CERT_FILE="${SIGNING_CERT_DIR}/${SIGNING_CERT_NAME}.crt"
+    SIGNING_CERT_KEY="${SIGNING_CERT_DIR}/${SIGNING_CERT_NAME}.key"
+    CA_EXPIRE_DAYS="${CA_EXPIRE_DAYS:-365}"
+
+    mkdir -p "$SIGNING_CERT_DIR"
+
+    if [ -f "$SIGNING_CERT_FILE" ] && [ -f "$SIGNING_CERT_KEY" ]; then
+        echo "Using existing device local CA certificate: $SIGNING_CERT_FILE" >&2
+    else
+        echo "Creating new device local CA certificate: $SIGNING_CERT_FILE" >&2
+        openssl req \
+            -new \
+            -x509 \
+            -days "$CA_EXPIRE_DAYS" \
+            -extensions v3_ca \
+            -nodes \
+            -subj "/O=thin-edge/OU=local-ca/CN=${SIGNING_CERT_NAME}" \
+            -keyout "$SIGNING_CERT_KEY" \
+            -out "$SIGNING_CERT_FILE" >/dev/null 2>&1
+    fi
+
+    # Upload the signing CA on the target
+    LOCAL_CERT_DIR=/etc/tedge/device-certs/local-certs
+    LOCAL_SIGNING_CERT_FILE="${LOCAL_CERT_DIR}/${SIGNING_CERT_NAME}.crt"
+
+    "${SCP_CMD}" "$SIGNING_CERT_FILE" "$TARGET" "/tmp/${SIGNING_CERT_NAME}.crt"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mkdir -p "$LOCAL_CERT_DIR"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mv "/tmp/${SIGNING_CERT_NAME}.crt" "$LOCAL_SIGNING_CERT_FILE"
+
+    # Make the signing certificate trusted by the device
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" cp "$LOCAL_SIGNING_CERT_FILE" "/usr/local/share/ca-certificates"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" update-ca-certificates
+}
+
+# Create a certificate that is trusted by all the entities attached to a main device
+#
+# This certificate is created on the target device,
+# but signed on the host running the `c8y tedge` command on behalf of the main device.
+create_local_cert() {
+    MAIN_DEVICE_ID=$1
+    SERVICE=$2
+    if [ -z "$MAIN_DEVICE_ID" ]; then
+        echo "mTLS cannot be enabled without an id for the main device" >&2
+        exit 1
+    fi
+    if [ -z "$SERVICE" ]; then
+        SERVICE=main-agent
+    fi
+
+    # Prepare required info for subjectAltName
+    TARGET_DNS=
+    TARGET_IP=
+    TARGET_WITHOUT_USER="${TARGET//*@/}"
+
+    if is_ip_address "$TARGET_WITHOUT_USER"; then
+        TARGET_IP="$TARGET_WITHOUT_USER"
+    else
+        TARGET_DNS="$TARGET_WITHOUT_USER"
+    fi
+
+    if [ -z "$TARGET_DNS" ]; then
+        TARGET_DNS=$("${EXEC_CMD[@]}" "$TARGET" hostname 2>/dev/null || true)
+    fi
+
+    if [ -z "$TARGET_IP" ]; then
+        TARGET_IP=$("${EXEC_CMD[@]}" "$TARGET" "ip route get 8.8.8.8 2>/dev/null | sed -E 's/.*src (\S+) .*/\1/;t;d' 2>/dev/null || true")
+    fi
+
+    # Prepare cert files
+    SIGNING_CERT_DIR="${HOME}/.tedge/device-signing-certs"
+    SIGNING_CERT_NAME="${MAIN_DEVICE_ID}-local-ca"
+    SIGNING_CERT_FILE="${SIGNING_CERT_DIR}/${SIGNING_CERT_NAME}.crt"
+    SIGNING_CERT_KEY="${SIGNING_CERT_DIR}/${SIGNING_CERT_NAME}.key"
+    CA_EXPIRE_DAYS="${CA_EXPIRE_DAYS:-365}"
+
+    LOCAL_CERT_DIR=/etc/tedge/device-certs/local-certs
+    LOCAL_CERT_NAME="${DEVICE_ID}-${SERVICE}"
+    LOCAL_CERT_FILE="${LOCAL_CERT_DIR}/${LOCAL_CERT_NAME}.crt"
+    LOCAL_CERT_KEY="${LOCAL_CERT_DIR}/${LOCAL_CERT_NAME}.key"
+    LOCAL_SIGNING_CERT_FILE="${LOCAL_CERT_DIR}/${SIGNING_CERT_NAME}.crt"
+
+    "${EXEC_CMD[@]}" "$TARGET" mkdir -p "$LOCAL_CERT_DIR"
+
+    if ! "${EXEC_CMD[@]}" "$TARGET" test -f "$LOCAL_CERT_KEY"; then
+        info "Creating device private key"
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO openssl genrsa -out "$LOCAL_CERT_KEY" 2048
+        "${EXEC_CMD[@]}" "$TARGET" sudo chown tedge:root "$LOCAL_CERT_KEY"
+        "${EXEC_CMD[@]}" "$TARGET" sudo chmod 400 "$LOCAL_CERT_KEY"
+    else
+        info "Using existing private key"
+    fi
+
+    # Create Certificate Signing Request (CSR)
+    DEVICE_CSR=$(
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO openssl req \
+            -key "$LOCAL_CERT_KEY" \
+            -new \
+            -subj "/O=thin-edge/OU=${DEVICE_ID}/CN=${SERVICE}"
+    )
+
+    # Sign the CSR
+    if [ "$SERVICE" = "child-agent" ]; then
+        CERT_EXT=$(cat << EOF
+basicConstraints=CA:FALSE
+extendedKeyUsage = clientAuth
+EOF
+    )
+    else
+        SUBJECT_ALT_NAMES="DNS:localhost,IP:127.0.0.1"
+        if [ -n "$TARGET_IP" ]; then
+            SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,IP:$TARGET_IP"
+        fi
+        if [ -n "$TARGET_DNS" ]; then
+            SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,DNS:$TARGET_DNS"
+        fi
+        CERT_EXT=$(cat << EOF
+authorityKeyIdentifier=keyid
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyAgreement
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = ${SUBJECT_ALT_NAMES}
+EOF
+    )
+    fi
+
+    DEVICE_CERT_CHAIN="/tmp/${LOCAL_CERT_NAME}.crt"
+    openssl x509 -req \
+        -in <(echo "$DEVICE_CSR") \
+        -out "$DEVICE_CERT_CHAIN" \
+        -CA "$SIGNING_CERT_FILE" \
+        -CAkey "$SIGNING_CERT_KEY" \
+        -extfile <(echo "$CERT_EXT") \
+        -CAcreateserial \
+        -days "$LEAF_EXPIRE_DAYS"
+
+    # Build certificate chain (from leaf cert to the signing cert)
+    cat "$SIGNING_CERT_FILE" >> "$DEVICE_CERT_CHAIN"
+
+    # Copy cert to device
+    "${SCP_CMD}" "$DEVICE_CERT_CHAIN" "$TARGET" "/tmp/${LOCAL_CERT_NAME}.crt"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mv "/tmp/${LOCAL_CERT_NAME}.crt" "$LOCAL_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chown tedge:root "$LOCAL_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 644 "$LOCAL_CERT_FILE"
+
+    case "$SERVICE" in
+        mqtt-broker)
+            configure_mtls_mqtt_broker "$TARGET_IP" "$TARGET_DNS" "$LOCAL_SIGNING_CERT_FILE" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
+            ;;
+        main-agent)
+            configure_mtls_mqtt_client "$TARGET_IP" "$TARGET_DNS" "$LOCAL_SIGNING_CERT_FILE" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
+            configure_mtls_main_agent "$TARGET_IP" "$TARGET_DNS" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
+            ;;
+        c8y-mapper)
+            configure_mtls_c8y_mapper "$TARGET_IP" "$TARGET_DNS" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
+            ;;
+        child-agent)
+	        # GET IP and DNS of the main device
+            MAIN_DEVICE_IP=
+            MAIN_DEVICE_DNS=
+            MAIN_DEVICE_WITHOUT_USER="${MAIN_DEVICE//*@/}"
+
+            if is_ip_address "$$MAIN_DEVICE_WITHOUT_USER"; then
+                MAIN_DEVICE_IP="$MAIN_DEVICE_WITHOUT_USER"
+            else
+                MAIN_DEVICE_DNS="$MAIN_DEVICE_WITHOUT_USER"
+            fi
+
+            if [ -z "$MAIN_DEVICE_DNS" ]; then
+                MAIN_DEVICE_DNS=$("${EXEC_CMD[@]}" "$MAIN_DEVICE" hostname 2>/dev/null || true)
+            fi
+            if [ -z "$MAIN_DEVICE_IP" ]; then
+                MAIN_DEVICE_IP=$("${EXEC_CMD[@]}" "$MAIN_DEVICE" "ip route get 8.8.8.8 2>/dev/null | sed -E 's/.*src (\S+) .*/\1/;t;d' 2>/dev/null || true")
+            fi
+            configure_mtls_mqtt_client "$MAIN_DEVICE_IP" "$MAIN_DEVICE_DNS" "$LOCAL_SIGNING_CERT_FILE" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
+            configure_mtls_child_agent "$MAIN_DEVICE_IP" "$MAIN_DEVICE_DNS" "$LOCAL_CERT_FILE" "$LOCAL_CERT_KEY"
+            ;;
+        *)
+            ;;
+    esac
+}
+
+# configure tegde-agent on the main device
+configure_mtls_main_agent() {
+    TARGET_IP="$1"
+    TARGET_DNS="$2"
+    LOCAL_CERT_FILE="$3"
+    LOCAL_CERT_KEY="$4"
+
+    # tedge-agent acts as a server for file-transfer	
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.bind.address "$TARGET_IP"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.bind.port "8000"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.cert_path "$LOCAL_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.key_path "$LOCAL_CERT_KEY"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.ca_path /etc/ssl/certs
+
+    # tedge-agent is a client of c8y-proxy	
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.client.host "$TARGET_IP"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.client.port "8001"
+
+    # apply the new config
+    echo "Restart tedge-agent on ${TARGET_DNS}" >&2
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO systemctl restart tedge-agent
+}
+
+configure_mtls_c8y_mapper() {
+    TARGET_IP="$1"
+    TARGET_DNS="$2"
+    LOCAL_CERT_FILE="$3"
+    LOCAL_CERT_KEY="$4"
+
+    # c8y-mapper acts as a server for c8y proxy
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.bind.address "$TARGET_IP"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.bind.port "8001"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.cert_path "$LOCAL_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.key_path "$LOCAL_CERT_KEY"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.ca_path /etc/ssl/certs
+
+    # c8y-mapper is a client of file-transfer
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.host "$TARGET_IP"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.port "8000"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.auth.cert_file "$LOCAL_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.auth.key_file "$LOCAL_CERT_KEY"
+
+    # apply the new config
+    echo "Restart tedge-mapper-c8y on ${TARGET_DNS}" >&2
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO systemctl restart tedge-mapper-c8y
+}
+
+configure_mtls_child_agent() {
+    MAIN_DEVICE_IP="$1"
+    MAIN_DEVICE_DNS="$2"
+    LOCAL_CERT_FILE="$3"
+    LOCAL_CERT_KEY="$4"
+
+    # child_agent is a client of c8y-proxy	
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.client.host "$MAIN_DEVICE_IP"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.client.port "8001"
+
+    # child_agent is a client of file-transfer
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.host "$MAIN_DEVICE_IP"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.port "8000"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.auth.cert_file "$LOCAL_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.client.auth.key_file "$LOCAL_CERT_KEY"
+
+    # apply the new config
+    echo "Restart tedge-agent on ${TARGET_DNS}" >&2
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO systemctl restart tedge-agent
+}
+
+# configure mosquitto on the main device
+configure_mtls_mqtt_broker() {
+    TARGET_IP="$1"
+    TARGET_DNS="$2"
+    SIGNING_CERT_FILE="$3"
+    LOCAL_CERT_FILE="$4"
+    LOCAL_CERT_KEY="$5"
+
+    ## Move under /etc/mosquitto/ca_certificates/ all the mosquitto related certificates
+
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" cp "$SIGNING_CERT_FILE" /etc/mosquitto/ca_certificates/
+    SIGNING_CERT_FILE="/etc/mosquitto/ca_certificates/$(basename "$SIGNING_CERT_FILE")"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 444 "$SIGNING_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chown mosquitto:mosquitto "$SIGNING_CERT_FILE"
+
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mv "$LOCAL_CERT_FILE" /etc/mosquitto/ca_certificates/
+    LOCAL_CERT_FILE="/etc/mosquitto/ca_certificates/$(basename "$LOCAL_CERT_FILE")"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 444 "$LOCAL_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chown mosquitto:mosquitto "$LOCAL_CERT_FILE"
+
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mv "$LOCAL_CERT_KEY" /etc/mosquitto/ca_certificates/
+    LOCAL_CERT_KEY="/etc/mosquitto/ca_certificates/$(basename "$LOCAL_CERT_KEY")"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 400 "$LOCAL_CERT_KEY"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chown mosquitto:mosquitto "$LOCAL_CERT_KEY"
+
+    ## FIXME: For now nothing is changed on the host itself (so other tools, such as collectd, can connect as before)
+    ##
+    # Unset previously set bind address/port in cases users had previously set it to 0.0.0.0
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config unset mqtt.bind.address
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config unset mqtt.bind.port
+
+    ## FIXME: Mosquitto configuration generated with `mqtt.external` is incorrect
+    ##        see https://github.com/thin-edge/thin-edge.io/issues/2740
+    ##
+    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.external.bind.address "$TARGET_IP"
+    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.external.bind.port 1883
+    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.external.ca_path "$SIGNING_CERT_FILE"
+    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.external.cert_file "$LOCAL_CERT_FILE"
+    ## "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.external.key_file "$LOCAL_CERT_KEY"
+
+    ## As a workaround the configuration for external settings is created independently without `tedge`
+
+    cat << EOF >"/tmp/${DEVICE_ID}-tls-listener.conf"
+listener 8883 ${TARGET_IP}
+allow_anonymous false
+require_certificate true
+use_identity_as_username true
+use_username_as_clientid false
+cafile ${SIGNING_CERT_FILE}
+certfile ${LOCAL_CERT_FILE}
+keyfile ${LOCAL_CERT_KEY}
+EOF
+
+    "${SCP_CMD}" "/tmp/${DEVICE_ID}-tls-listener.conf" "$TARGET" "/tmp/tls-listener.conf"
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mv "/tmp/tls-listener.conf" /etc/mosquitto/conf.d
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chown mosquitto:mosquitto /etc/mosquitto/conf.d/tls-listener.conf
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" chmod 644 /etc/mosquitto/conf.d/tls-listener.conf
+
+    # apply the new config
+    echo "Restart mosquitto on ${TARGET_DNS}" >&2
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO systemctl restart mosquitto
+}
+
+# configure mqtt on a child device
+configure_mtls_mqtt_client() {
+    TARGET_IP="$1"
+    TARGET_DNS="$2"
+    SIGNING_CERT_FILE="$3"
+    LOCAL_CERT_FILE="$4"
+    LOCAL_CERT_KEY="$5"
+
+    if [ -z "$MAIN_DEVICE" ]; then
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.device_topic_id "device/main//"
+    else
+        # TODO: Should other services be stopped/disabled on a child device automatically
+        # (in case the device was previously setup with thin-edge.io main device installed)
+        "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.device_topic_id "device/$DEVICE_ID//"
+    fi
+
+    # TODO: Support using a hostname once https://github.com/thin-edge/thin-edge.io/issues/2803 is resolved
+    # to be more flexible if the ip address changes over time (e.g. DHCP)
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.host "$TARGET_IP"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.port 8883
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.auth.ca_file "$SIGNING_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.auth.cert_file "$LOCAL_CERT_FILE"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.auth.key_file "$LOCAL_CERT_KEY"
+}
+
 get_device_id() {
     # Get identity (stop on first non empty value)
     target="$1"
@@ -334,12 +738,21 @@ EXEC_CMD=(
     -n
 )
 
+remote_scp() {
+    scp "$1" "$2:$3"
+}
+
+SCP_CMD=remote_scp
+
 do_action() {
     if [ $# -gt 0 ]; then
         TARGET="$1"
     fi
+    if [ -n "$MAIN_DEVICE" ]; then
+        MAIN_DEVICE_ID=$(get_device_id "$MAIN_DEVICE")
+    fi
     if [ -n "$SSH_USER" ]; then
-        TARGET="$SSH_USER@$TARGET"
+         TARGET="$SSH_USER@$TARGET"
     fi
 
     # Don't use sudo if the user is root
@@ -361,24 +774,6 @@ do_action() {
         URL=$(c8y sessions get --select host -o csv | sed -E 's|https?://||')
     fi
 
-    # Disconnect if tedge is already connected
-    # Note: Check if the mapper is configured or not but it can't be assumed that it is successfully configured
-    EXISTING_C8Y_URL=$("${EXEC_CMD[@]}" "$TARGET" tedge config get c8y.url 2>/dev/null ||:)
-    if [ -n "$EXISTING_C8Y_URL" ]; then
-        # TODO: Add option to abort if already bootstrapped (to prevent accidental)
-        echo "tedge is already connected, so disconnecting before bootstrapping" >&2
-        "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge disconnect c8y ||:
-
-        # Clear some existing state
-        # FIXME: Remove once the following are resolved
-        # * https://github.com/thin-edge/thin-edge.io/issues/2584
-        # * https://github.com/thin-edge/thin-edge.io/issues/2606
-        "${EXEC_CMD[@]}" "$TARGET" $SUDO systemctl stop mosquitto tedge-agent
-        "${EXEC_CMD[@]}" "$TARGET" $SUDO rm -f /var/lib/mosquitto/mosquitto.db /etc/tedge/.tedge-mapper-c8y/entity_store.jsonl /data/mosquitto/mosquitto.db
-    fi
-
-    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.url "$URL"
-
     # Get identity
     DEVICE_ID=$(get_device_id "$TARGET" "$DEVICE_ID")
     if [ -z "$DEVICE_ID" ]; then
@@ -386,51 +781,89 @@ do_action() {
         exit 1
     fi
 
-    case "$BOOTSTRAP_TYPE" in
-            self-signed)
-                create_self_signed
-                ;;
-            local-ca)
-                if ! command -V openssl >/dev/null 2>&1; then
-                    echo "Missing dependency: openssl is not installed" >&2
-                    exit 1
-                fi
-                create_ca
-                create_remote_cert
-                ;;
-            *)
-                echo "Unknown bootstrapping method" >&2
-                exit 1
-                ;;
-    esac
-
-    # Wait for certificate to be enabled
-    if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y --test >/dev/null 2>&1; then
-        sleep 2
-
-        attempt=0
-        max_attempts=10
-        success=0
-        while [ "$attempt" -lt "$max_attempts" ]; do
-            if "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y; then
-                success=1
-                break
-            fi
-
-            echo "Connection failed. Trying again in 5 seconds" >&2
-            sleep 5
-        done
-
-        if [ "$success" = "1" ]; then
-            echo "Successfully bootstrapped device" >&2
+    # Disconnect if tedge is already connected
+    # Note: Check if the mapper is configured or not but it can't be assumed that it is successfully configured
+    EXISTING_C8Y_URL=$("${EXEC_CMD[@]}" "$TARGET" tedge config get c8y.url 2>/dev/null ||:)
+    if [ -n "$EXISTING_C8Y_URL" ]; then
+        if [ "$RENEW_CERT" = 0 ]; then
+            echo "tedge is already connected, skipping certificate generation" >&2
         else
-            echo "Bootstrapping failed. Please check the console output for more details" >&2
+            echo "tedge is already connected, so disconnecting before bootstrapping" >&2
+            "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge disconnect c8y ||:
+            "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.url "$URL"
+
+            case "$BOOTSTRAP_TYPE" in
+                    self-signed)
+                        create_self_signed
+                        ;;
+                    local-ca)
+                        if ! command -V openssl >/dev/null 2>&1; then
+                            echo "Missing dependency: openssl is not installed" >&2
+                            exit 1
+                        fi
+                        create_ca
+                        create_remote_cert
+                        ;;
+                    *)
+                        echo "Unknown bootstrapping method" >&2
+                        exit 1
+                        ;;
+            esac
         fi
     fi
 
-    # Open device management page for the device
-    if [ "$OPEN_WEBSITE" = 1 ]; then
-        c8y identity get -n --name "$DEVICE_ID" | c8y applications open --application devicemanagement --page "$WEBSITE_PAGE"
+    IS_MAIN_DEVICE=1
+    if [ "$ENABLE_MTLS" = "1" ]; then
+        if ! command -V openssl >/dev/null 2>&1; then
+            echo "Missing dependency: openssl is not installed" >&2
+            exit 1
+        fi
+        if [ -z "$MAIN_DEVICE" ]; then
+            # enabling mTLS on the main device
+            create_signing_cert "$DEVICE_ID"
+            create_local_cert "$DEVICE_ID" mqtt-broker
+            create_local_cert "$DEVICE_ID" main-agent
+            create_local_cert "$DEVICE_ID" c8y-mapper
+        else
+            # enabling mTLS on a child devicez
+            create_signing_cert "$MAIN_DEVICE_ID"
+            create_local_cert "$MAIN_DEVICE_ID" child-agent
+
+            # Don't run tedge reconnect for a child device
+            IS_MAIN_DEVICE=0
+        fi
+    fi
+
+    # Only run when bootstrapping the main device
+    if [ "$IS_MAIN_DEVICE" = 1 ]; then
+        # Wait for certificate to be enabled
+        if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y --test >/dev/null 2>&1; then
+            sleep 2
+
+            attempt=0
+            max_attempts=10
+            success=0
+            while [ "$attempt" -lt "$max_attempts" ]; do
+                if "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge reconnect c8y; then
+                    success=1
+                    break
+                fi
+
+                echo "Connection failed. Trying again in 5 seconds" >&2
+                sleep 5
+            done
+
+            if [ "$success" = "1" ]; then
+                echo "Successfully bootstrapped device" >&2
+            else
+                echo "Bootstrapping failed. Please check the console output for more details" >&2
+            fi
+        fi
+
+        # Open device management page for the device
+        if [ "$OPEN_WEBSITE" = 1 ]; then
+            c8y identity get -n --name "$DEVICE_ID" | c8y applications open --application devicemanagement --page "$WEBSITE_PAGE"
+        fi
     fi
 }
 
