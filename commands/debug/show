@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -e
 TARGET=${TARGET:-}
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+LEVEL=1
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -43,6 +45,10 @@ EOT
 #
 while [ $# -gt 0 ]; do
     case "$1" in
+        --level)
+            LEVEL="$2"
+            shift
+            ;;
         --examples)
             examples
             exit 0
@@ -67,11 +73,17 @@ if [ -z "$TARGET" ]; then
     exit 1
 fi
 
-MODEL=$(ssh "$TARGET" cat /proc/cpuinfo | grep Model | cut -d: -f2- | xargs)
-OS_NAME=$(ssh "$TARGET" cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2- | tr -d \")
-UNAME=$(ssh "$TARGET" uname -a)
-TEDGE_VERSION=$(ssh "$TARGET" tedge --version)
-MOSQUITTO_VERSION=$(ssh "$TARGET" /usr/sbin/mosquitto -h | head -n1 | sed 's/mosquitto version//g'| xargs)
+# copy script to remote device
+scp "$SCRIPT_DIR/../../data/tedge-debug.sh"  "${TARGET}:/tmp/" >&2
+ssh "$TARGET" chmod +x /tmp/tedge-debug.sh >&2
+ssh "$TARGET" /tmp/tedge-debug.sh --level "$LEVEL" >&2
+
+DEBUG_FILE="./${TARGET}-debug.tar.gz" >&2
+scp "${TARGET}:/tmp/debug.tar.gz" "$DEBUG_FILE" >&2
+
+
+tar xvzf "$DEBUG_FILE" ./device.txt >&2
+source ./device.txt
 
 # Note: Print instructions on stderr, but print actual output to stdout
 # so that it can be copied/pasted easier, e.g. using piping `pbcopy`
@@ -80,11 +92,42 @@ printf '\n' >&2
 printf 'Debug information: (copy/paste to the ticket)\n\n' >&2
 printf '  https://github.com/thin-edge/thin-edge.io/issues/new?assignees=&labels=bug&projects=&template=bug_report.md\n' >&2
 printf '\n' >&2
-printf '|Property|Value|\n'
-printf '|--------|-----|\n'
-printf '|OS [incl. version]|`%s`|\n' "${OS_NAME:-unknown}"
-printf '|Hardware [incl. revision]|`%s`|\n' "${MODEL:-unknown}"
-printf '|System-Architecture|`%s`|\n' "$UNAME"
-printf '|thin-edge.io version|`%s`|\n' "$TEDGE_VERSION"
-printf '|mosquitto version|`%s`|\n' "${MOSQUITTO_VERSION:-unknown}"
-printf '' >&2
+
+
+cat << EOT
+**Describe the bug**
+<!-- A clear and concise description of what the bug is.  -->
+
+**To Reproduce**
+<!-- Steps to reproduce the behavior. The more detail you add here, the better we can reproduce the bug. -->
+
+**Expected behavior**
+<!-- A clear and concise description of what you expected to happen. -->
+
+**Screenshots**
+<!-- If applicable, add screenshots to help explain your problem. -->
+
+**Environment (please complete the following information):**
+
+|Property|Value|
+|--------|-----|
+|OS [incl. version]|\`$OS_NAME\`|
+|Hardware [incl. revision]|\`$MODEL\`|
+|System-Architecture|\`$UNAME\`|
+|thin-edge.io version|\`$TEDGE_VERSION\`|
+|mosquitto version|\`$MOSQUITTO_VERSION\`|
+
+**Additional context**
+<!-- Add any other context about the problem here. -->
+
+EOT
+
+
+printf '\n\nUpload the following file to the ticket:\n' >&2
+printf '\n' >&2
+printf '    %s' "$DEBUG_FILE"  >&2
+printf '\n' >&2
+
+
+# TODO create ticket via gh command
+# gh issue create
