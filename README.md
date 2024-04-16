@@ -37,3 +37,8 @@ The bootstrapping processes does:
 * Create the device certificate (if required)
 * Fetch public device certificate and upload it to Cumulocity IoT (private key does not leave the device)
 * Open the device in the Cumulocity IoT Device Management application
+
+## Test cases
+
+* bootstrap new device
+* rebootstrap changing the c8y.url to a different target

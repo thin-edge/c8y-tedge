@@ -1,0 +1,28 @@
+version: "3"
+services:
+  c8y:
+    build:
+      dockerfile: ./images/go-c8y-cli.dockerfile
+      context: .
+      args:
+        - SSH_PRIVATE_KEY=${SSH_PRIVATE_KEY:-}
+    environment:
+      - SSH_PRIVATE_KEY=${SSH_PRIVATE_KEY:-}
+    env_file:
+      - .env
+
+  tedge:
+    build:
+      dockerfile: ./images/tedge.dockerfile
+      context: .
+      args:
+        - SSH_PUBLIC_KEY=${SSH_PUBLIC_KEY:-}
+    privileged: true
+
+  child01:
+    build:
+      dockerfile: ./images/child.dockerfile
+      context: .
+      args:
+        - SSH_PUBLIC_KEY=${SSH_PUBLIC_KEY:-}
+    privileged: true
