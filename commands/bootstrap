@@ -2,11 +2,12 @@
 set -e
 DEVICE_ID=
 TARGET=
-OPEN_WEBSITE=1
-RENEW_CERT=1
+OPEN_WEBSITE=${OPEN_WEBSITE:-1}
+RENEW_CERT=${RENEW_CERT:-1}
 WEBSITE_PAGE="device-info"
 SSH_USER=
 MAIN_DEVICE=
+ENABLE_MTLS=${ENABLE_MTLS:-0}
 SCAN=${SCAN:-0}
 PATTERN="${PATTERN:-.+}"
 BOOTSTRAP_TYPE="${BOOTSTRAP_TYPE:-}"
@@ -198,6 +199,21 @@ is_ip_address() {
 CA_CERT_FILE="${CA_CERT_FILE:-$HOME/tedge-ca.crt}"
 CA_CERT_KEY="${CA_CERT_KEY:-$HOME/tedge-ca.key}"
 LEAF_EXPIRE_DAYS=365
+
+should_bootstrap_cloud() {
+    if [ "$ENABLE_MTLS" = 0 ]; then
+        return 0
+    fi
+
+    if [ "$ENABLE_MTLS" = 1 ] && [ -z "$MAIN_DEVICE" ]; then
+        return 0
+    fi
+    return 1
+}
+
+is_connected() {
+    "${EXEC_CMD[@]}" "$1" tedge connect c8y --test >/dev/null 2>&1
+}
 
 create_ca() {
     #
@@ -781,11 +797,29 @@ do_action() {
         exit 1
     fi
 
+    if [ "$ENABLE_MTLS" = "1" ]; then
+        if ! command -V openssl >/dev/null 2>&1; then
+            echo "Missing dependency: openssl is not installed" >&2
+            exit 1
+        fi
+        if [ -z "$MAIN_DEVICE" ]; then
+            # enabling mTLS on the main device
+            create_signing_cert "$DEVICE_ID"
+            create_local_cert "$DEVICE_ID" mqtt-broker
+            create_local_cert "$DEVICE_ID" main-agent
+            create_local_cert "$DEVICE_ID" c8y-mapper
+        else
+            # enabling mTLS on a child device
+            create_signing_cert "$MAIN_DEVICE_ID"
+            create_local_cert "$MAIN_DEVICE_ID" child-agent
+        fi
+    fi
+
     # Disconnect if tedge is already connected
     # Note: Check if the mapper is configured or not but it can't be assumed that it is successfully configured
-    EXISTING_C8Y_URL=$("${EXEC_CMD[@]}" "$TARGET" tedge config get c8y.url 2>/dev/null ||:)
-    if [ -n "$EXISTING_C8Y_URL" ]; then
-        if [ "$RENEW_CERT" = 0 ]; then
+    if should_bootstrap_cloud; then
+        IS_CONNECTED=$(is_connected "$TARGET" && echo "1" || echo "0")
+        if [ "$RENEW_CERT" = 0 ] && [ "$IS_CONNECTED" = 1 ]; then
             echo "tedge is already connected, skipping certificate generation" >&2
         else
             echo "tedge is already connected, so disconnecting before bootstrapping" >&2
@@ -810,32 +844,6 @@ do_action() {
                         ;;
             esac
         fi
-    fi
-
-    IS_MAIN_DEVICE=1
-    if [ "$ENABLE_MTLS" = "1" ]; then
-        if ! command -V openssl >/dev/null 2>&1; then
-            echo "Missing dependency: openssl is not installed" >&2
-            exit 1
-        fi
-        if [ -z "$MAIN_DEVICE" ]; then
-            # enabling mTLS on the main device
-            create_signing_cert "$DEVICE_ID"
-            create_local_cert "$DEVICE_ID" mqtt-broker
-            create_local_cert "$DEVICE_ID" main-agent
-            create_local_cert "$DEVICE_ID" c8y-mapper
-        else
-            # enabling mTLS on a child devicez
-            create_signing_cert "$MAIN_DEVICE_ID"
-            create_local_cert "$MAIN_DEVICE_ID" child-agent
-
-            # Don't run tedge reconnect for a child device
-            IS_MAIN_DEVICE=0
-        fi
-    fi
-
-    # Only run when bootstrapping the main device
-    if [ "$IS_MAIN_DEVICE" = 1 ]; then
         # Wait for certificate to be enabled
         if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y --test >/dev/null 2>&1; then
             sleep 2
