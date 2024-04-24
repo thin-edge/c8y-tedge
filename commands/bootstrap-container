@@ -145,27 +145,6 @@ container_service_check() {
     "$C8Y_TEDGE_CONTAINER_CLI" compose ps -a --format '{{.State}}' "$1"
 }
 
-# Default to docker
-EXEC_CMD=(
-    "$C8Y_TEDGE_CONTAINER_CLI"
-    exec
-)
-CHECK_CMD=(
-    container_check
-)
-
-# Auto detect a local docker-compose file and use the service name instead
-if [ -f "$COMPOSE_FILE" ] || [ -f docker-compose.yaml ] || [ -f docker-compose.yml ]; then
-    EXEC_CMD=(
-        "$C8Y_TEDGE_CONTAINER_CLI"
-        compose
-        exec
-        --no-TTY
-    )
-    CHECK_CMD=(
-        container_service_check
-    )
-fi
 
 wait_for_container() {
     # Wait for container to be ready (or skip if it has already exited)
@@ -207,6 +186,41 @@ wait_for_container() {
 do_action() {
     if [ $# -gt 0 ]; then
         TARGET="$1"
+    fi
+
+    # Default to container cli
+    EXEC_CMD=(
+        "$C8Y_TEDGE_CONTAINER_CLI"
+        exec
+    )
+    CHECK_CMD=(
+        container_check
+    )
+
+    # Detect docker or docker-compose logic
+    # Auto detect a local docker-compose file and use the service name instead
+    if [ -f "$COMPOSE_FILE" ] || [ -f docker-compose.yaml ] || [ -f docker-compose.yml ]; then
+        echo "Detected a docker-compose file. Checking if '$TARGET' is a service or a container name" >&2
+
+        if [ -n "$TARGET" ]; then
+            # Check if the the user provided a container name or the compose service name
+            # If the user provided a container name, then stick with user docker cli (rather than docker compose)
+            if container_service_check "$TARGET" >/dev/null 2>&1; then
+                echo "User provided compose service name: $TARGET" >&2
+                EXEC_CMD=(
+                    "$C8Y_TEDGE_CONTAINER_CLI"
+                    compose
+                    exec
+                    --no-TTY
+                )
+
+                CHECK_CMD=(
+                    container_service_check
+                )
+            else
+                echo "User provided container name: $TARGET" >&2
+            fi
+        fi
     fi
 
     if [ -z "$DEVICE_ID" ]; then
