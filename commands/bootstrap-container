@@ -135,16 +135,23 @@ fi
 
 echo "Using container cli: $C8Y_TEDGE_CONTAINER_CLI" >&2
 
+container_check() {
+    name="$1"
+    "$C8Y_TEDGE_CONTAINER_CLI" ps -a --format '{{.State}}' --filter name="$name"
+}
+
+container_service_check() {
+    name="$1"
+    "$C8Y_TEDGE_CONTAINER_CLI" compose ps -a --format '{{.State}}' "$1"
+}
+
 # Default to docker
 EXEC_CMD=(
     "$C8Y_TEDGE_CONTAINER_CLI"
     exec
 )
 CHECK_CMD=(
-    "$C8Y_TEDGE_CONTAINER_CLI"
-    ps
-    -a
-    --format '{{.State}}'
+    container_check
 )
 
 # Auto detect a local docker-compose file and use the service name instead
@@ -156,11 +163,7 @@ if [ -f "$COMPOSE_FILE" ] || [ -f docker-compose.yaml ] || [ -f docker-compose.y
         --no-TTY
     )
     CHECK_CMD=(
-        "$C8Y_TEDGE_CONTAINER_CLI"
-        compose
-        ps
-        -a
-        --format '{{.State}}'
+        container_service_check
     )
 fi
 
