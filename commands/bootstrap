@@ -257,6 +257,30 @@ create_ca() {
     echo "Uploaded certificate" >&2
 }
 
+get_subject_alt_names() {
+    SUBJECT_ALT_NAMES="DNS:localhost,IP:127.0.0.1"
+
+    while [ $# -gt 0 ]; do
+        target="$1"
+        shift
+        if [ -n "$target" ]; then
+            TARGET_WITHOUT_USER="${target//*@/}"
+            if is_ip_address "$TARGET_WITHOUT_USER"; then
+                SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,IP:$TARGET_WITHOUT_USER"
+            else
+                # Add both the .local and plain hostname address to the alt names
+                SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,DNS:$TARGET_WITHOUT_USER"
+
+                TARGET_WITHOUT_LOCAL="${TARGET_WITHOUT_USER//.local/}"
+                if [ "$TARGET_WITHOUT_LOCAL" != "$TARGET_WITHOUT_USER" ]; then
+                    SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,DNS:$TARGET_WITHOUT_LOCAL"
+                fi
+            fi
+        fi
+    done
+    echo "$SUBJECT_ALT_NAMES"
+}
+
 create_remote_cert() {
     DEVICE_KEY_PATH=$("${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config get device.key_path)
     DEVICE_CERT_PATH=$("${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config get device.cert_path)
@@ -280,15 +304,6 @@ create_remote_cert() {
     "${EXEC_CMD[@]}" "$TARGET" $SUDO chown mosquitto:root "$DEVICE_KEY_PATH"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO chmod 600 "$DEVICE_KEY_PATH"
 
-    SUBJECT_ALT_NAMES="DNS:localhost,IP:127.0.0.1"
-    if [ -n "$TARGET" ]; then
-        TARGET_WITHOUT_USER="${TARGET//*@/}"
-        if is_ip_address "$TARGET_WITHOUT_USER"; then
-            SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,IP:$TARGET_WITHOUT_USER"
-        else
-            SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,DNS:$TARGET_WITHOUT_USER"
-        fi
-    fi
 
     # Sign the CSR
     CERT_EXT=$(cat << EOF
@@ -296,7 +311,7 @@ authorityKeyIdentifier=keyid
 basicConstraints=CA:FALSE
 keyUsage = digitalSignature, keyAgreement
 extendedKeyUsage = serverAuth, clientAuth
-subjectAltName=${SUBJECT_ALT_NAMES}
+subjectAltName=$(get_subject_alt_names "$TARGET")
 EOF
     )
 
@@ -488,19 +503,12 @@ extendedKeyUsage = clientAuth
 EOF
     )
     else
-        SUBJECT_ALT_NAMES="DNS:localhost,IP:127.0.0.1"
-        if [ -n "$TARGET_IP" ]; then
-            SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,IP:$TARGET_IP"
-        fi
-        if [ -n "$TARGET_DNS" ]; then
-            SUBJECT_ALT_NAMES="$SUBJECT_ALT_NAMES,DNS:$TARGET_DNS"
-        fi
         CERT_EXT=$(cat << EOF
 authorityKeyIdentifier=keyid
 basicConstraints=CA:FALSE
 keyUsage = digitalSignature, keyAgreement
 extendedKeyUsage = serverAuth, clientAuth
-subjectAltName = ${SUBJECT_ALT_NAMES}
+subjectAltName = $(get_subject_alt_names "$TARGET_IP" "$TARGET_DNS")
 EOF
     )
     fi
