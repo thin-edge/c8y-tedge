@@ -193,7 +193,7 @@ error() {
 
 is_ip_address() {
     # TODO: Support IPV6 addresses
-    [[ "$1" =~ ^[0-9][0-9]?[0-9]?+\.[0-9][0-9]?[0-9]?+\.[0-9][0-9]?[0-9]?+\.[0-9][0-9]?[0-9]?+$ ]]
+    [[ "$1" =~ ^[0-9][0-9]?[0-9]?\.[0-9][0-9]?[0-9]?\.[0-9][0-9]?[0-9]?\.[0-9][0-9]?[0-9]?$ ]]
 }
 
 CA_CERT_FILE="${CA_CERT_FILE:-$HOME/tedge-ca.crt}"
@@ -541,7 +541,7 @@ EOF
             MAIN_DEVICE_DNS=
             MAIN_DEVICE_WITHOUT_USER="${MAIN_DEVICE//*@/}"
 
-            if is_ip_address "$$MAIN_DEVICE_WITHOUT_USER"; then
+            if is_ip_address "$MAIN_DEVICE_WITHOUT_USER"; then
                 MAIN_DEVICE_IP="$MAIN_DEVICE_WITHOUT_USER"
             else
                 MAIN_DEVICE_DNS="$MAIN_DEVICE_WITHOUT_USER"
