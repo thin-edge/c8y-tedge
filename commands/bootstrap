@@ -768,6 +768,12 @@ remote_scp() {
 
 SCP_CMD=remote_scp
 
+# NOTE: Some SSH services (like dropbear) don't inherit the PATH variable, so it results in some false
+# negatives when tedge tries to detect the mosquitto version, e.g.:
+#   Failed to detect mosquitto version: assuming mosquitto version < 2.0.0
+#
+REMOTE_PATH="PATH=\$PATH:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+
 do_action() {
     if [ $# -gt 0 ]; then
         TARGET="$1"
@@ -853,14 +859,14 @@ do_action() {
             esac
         fi
         # Wait for certificate to be enabled
-        if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge connect c8y --test >/dev/null 2>&1; then
+        if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO PATH="$REMOTE_PATH" tedge connect c8y --test >/dev/null 2>&1; then
             sleep 2
 
             attempt=0
             max_attempts=10
             success=0
             while [ "$attempt" -lt "$max_attempts" ]; do
-                if "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge reconnect c8y; then
+                if "${EXEC_CMD[@]}" "$TARGET" $SUDO PATH="$REMOTE_PATH" tedge reconnect c8y; then
                     success=1
                     break
                 fi
