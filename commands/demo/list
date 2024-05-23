@@ -1,0 +1,32 @@
+#!/bin/sh
+set -e
+
+usage() {
+    cat <<EOT >&2
+List the existing tedge-container-demo instances
+
+c8y tedge demo list
+
+Examples
+
+  c8y tedge demo list
+  # List all existing demos
+
+EOT
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"
+export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
+ls -c1 "$PROJECT_DIR"

@@ -1,0 +1,63 @@
+#!/bin/sh
+set -e
+
+usage() {
+    cat <<EOT >&2
+Start a new tedge-container-demo instance
+
+It will download the latest docker-compose from the https://github.com/thin-edge/tedge-demo-container repository
+and bootstrap it using your current go-c8y-cli session.
+
+c8y tedge demo start <DEVICE_NAME>
+
+Examples
+
+  c8y tedge demo start mydevice001
+  # Start a tedge-container-demo using the device name 'mydevice001'
+
+EOT
+}
+
+fail() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+if [ $# -lt 1 ]; then
+    fail "Missing device name (aka project name)"
+fi
+NAME="$1"
+shift
+
+COMPOSE_URL="https://raw.githubusercontent.com/thin-edge/tedge-demo-container/main/demos/docker-compose/device/docker-compose.yaml"
+PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"
+export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
+
+mkdir -p "$PROJECT_DIR"
+
+echo "Downloading the docker-compose.yaml file" >&2
+if command -V wget >/dev/null 2>&1; then
+    wget -q -O - "$COMPOSE_URL" > "$COMPOSE_FILE"
+elif command -V curl >/dev/null 2>&1; then
+    curl -LSs "$COMPOSE_URL" > "$COMPOSE_FILE"
+else
+    fail "Missing required dependencies: Either curl or wget is needed"
+fi
+
+echo "Running docker compose up -d" >&2
+(cd "$PROJECT_DIR" && docker compose up -d)
+
+echo "Bootstrapping" >&2
+c8y tedge bootstrap-container tedge "$NAME" "$@"
