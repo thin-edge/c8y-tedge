@@ -42,7 +42,7 @@ PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"
 export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
 
 if [ ! -f "$COMPOSE_FILE" ]; then
-    echo "Project does not exist" >&2
+    echo "Demo does not exist (under $PROJECT_DIR)" >&2
     exit 0
 fi
 

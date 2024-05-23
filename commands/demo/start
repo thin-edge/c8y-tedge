@@ -45,6 +45,7 @@ COMPOSE_URL="https://raw.githubusercontent.com/thin-edge/tedge-demo-container/ma
 PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"
 export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
 
+echo "Creating demo folder: $PROJECT_DIR" >&2
 mkdir -p "$PROJECT_DIR"
 
 echo "Downloading the docker-compose.yaml file" >&2

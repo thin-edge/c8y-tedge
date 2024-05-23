@@ -29,4 +29,7 @@ done
 
 PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"
 export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
+
+echo "Existing demos under: $PROJECT_DIR" >&2
+
 ls -c1 "$PROJECT_DIR"
