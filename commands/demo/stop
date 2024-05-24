@@ -1,0 +1,50 @@
+#!/bin/sh
+set -e
+
+usage() {
+    cat <<EOT >&2
+Stop an existing tedge-container-demo instance
+
+c8y tedge demo stop <DEVICE_NAME>
+
+Examples
+
+  c8y tedge demo stop mydevice001
+  # Stop an dmeo instance with the device name 'mydevice001'
+
+EOT
+}
+
+fail() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+if [ $# -lt 1 ]; then
+    fail "Missing device name (aka project name)"
+fi
+NAME="$1"
+shift
+
+PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"
+export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
+
+if [ ! -f "$COMPOSE_FILE" ]; then
+    echo "Demo does not exist (under $PROJECT_DIR)" >&2
+    exit 0
+fi
+
+(cd "$PROJECT_DIR" && docker compose down -v)
+rm -rf "$PROJECT_DIR"
