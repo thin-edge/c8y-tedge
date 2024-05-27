@@ -10,7 +10,7 @@ c8y tedge demo stop <DEVICE_NAME>
 Examples
 
   c8y tedge demo stop mydevice001
-  # Stop an dmeo instance with the device name 'mydevice001'
+  # Stop an demo instance with the device name 'mydevice001'
 
 EOT
 }
