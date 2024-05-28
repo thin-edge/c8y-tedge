@@ -12,6 +12,7 @@ SCAN=${SCAN:-0}
 PATTERN="${PATTERN:-.+}"
 BOOTSTRAP_TYPE="${BOOTSTRAP_TYPE:-}"
 SUDO=${SUDO:-}
+OFFLINE_MODE=${OFFLINE_MODE:-0}
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -63,6 +64,7 @@ FLAGS
   --main-device <MAIN_DEVICE>       Main device hostname or ip address to connect to via ssh. This is only used when enabling mTLS on a child device.
   --scan                            Bootstrap devices found by a scan
   --pattern <REGEX>                 Only include devices which match the given pattern (only applies when piping or scanning devices)
+  --offline                         Use offline mode where the cloud connection will not be checked. Ideal if your device does not have internet access
   --verbose                         Enable verbose logging
   --debug                           Enable debug logging
   -h, --help                        Show this help
@@ -78,6 +80,9 @@ EXAMPLES
 
 # Bootstrap a device via ssh
 c8y tedge bootstrap root@mydevice.local
+
+# Bootstrap a device via ssh in offline mode (if your device does not have internet access)
+c8y tedge bootstrap root@mydevice.local --offline
 
 # Bootstrap a device via ssh using a self signed certificate
 c8y tedge bootstrap root@mydevice.local --type self-signed
@@ -139,6 +144,9 @@ while [ $# -gt 0 ]; do
         --ssh-user)
             SSH_USER="$2"
             shift
+            ;;
+        --offline)
+            OFFLINE_MODE=1
             ;;
         --verbose|-v)
             export C8Y_SETTINGS_DEFAULTS_VERBOSE="true"
@@ -725,6 +733,28 @@ configure_mtls_mqtt_client() {
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.auth.key_file "$LOCAL_CERT_KEY"
 }
 
+c8y_bulk_registration() {
+    EXTERNAL_ID="$1"
+    DEVICE_TYPE="thin-edge.io"
+    if [ $# -gt 1 ]; then
+        DEVICE_TYPE="$2"
+    fi
+
+    REG_FILE="/tmp/${EXTERNAL_ID}.csv"
+
+    cat << EOT > "$REG_FILE"
+"ID","AUTH_TYPE","TYPE","NAME","com_cumulocity_model_Agent.active"
+"$EXTERNAL_ID",CERTIFICATES,"$DEVICE_TYPE","$EXTERNAL_ID",true
+EOT
+
+    echo "Manually registering device: $EXTERNAL_ID (type=$DEVICE_TYPE)" >&2
+    if ! c8y api POST devicecontrol/bulkNewDeviceRequests --file "$REG_FILE" --force; then
+        echo "Warning: Failed to manually register device (via c8y bulk registration API): $EXTERNAL_ID" >&2
+        exit 1
+    fi
+    rm -f "$REG_FILE"
+}
+
 get_device_id() {
     # Get identity (stop on first non empty value)
     target="$1"
@@ -858,6 +888,21 @@ do_action() {
                         ;;
             esac
         fi
+
+        # In offline mode, just configure the bridge, do not test the connection as the device may not have internet
+        if [ "$OFFLINE_MODE" = 1 ]; then
+            echo "Bootstrapping thin-edge.io in OFFLINE mode" >&2
+
+            # Register device via c8y bulk registration api because "tedge connect c8y" doesn't do it
+            c8y_bulk_registration "$DEVICE_ID"
+
+            if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO PATH="$REMOTE_PATH" tedge connect c8y --offline; then
+                echo "Offline mode requires thin-edge.io >= 1.1.0. Please upgrade and try again" >&2
+                exit 1
+            fi
+            exit 0
+        fi
+
         # Wait for certificate to be enabled
         if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO PATH="$REMOTE_PATH" tedge connect c8y --test >/dev/null 2>&1; then
             sleep 2
