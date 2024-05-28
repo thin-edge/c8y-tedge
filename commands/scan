@@ -54,6 +54,11 @@ while [ $# -gt 0 ]; do
             PATTERN="$2"
             shift
             ;;
+        --*|-*)
+            printf '\nERROR: Unknown flag. %s\n\n' "$1" >&2
+            usage
+            exit 1
+            ;;
         *)
             if [ -z "$TIMEOUT" ]; then
                 TIMEOUT="${1:-2}"
