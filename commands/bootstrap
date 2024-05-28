@@ -153,6 +153,11 @@ while [ $# -gt 0 ]; do
         --skip-renew-cert)
             RENEW_CERT=0
             ;;
+        --*|-*)
+            printf '\nERROR: Unknown flag. %s\n\n' "$1" >&2
+            usage
+            exit 1
+            ;;
         *)
             if [ -z "$TARGET" ]; then
                 TARGET="$1"
