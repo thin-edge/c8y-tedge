@@ -225,6 +225,11 @@ should_bootstrap_cloud() {
 }
 
 is_connected() {
+    # Check if the bridge is configured because if it isn't that is quicker then checking for connectivity
+    if ! "${EXEC_CMD[@]}" "$1" config get c8y.url >/dev/null 2>&1; then
+        return 1
+    fi
+
     "${EXEC_CMD[@]}" "$1" tedge connect c8y --test >/dev/null 2>&1
 }
 
