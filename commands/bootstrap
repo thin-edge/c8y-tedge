@@ -443,8 +443,9 @@ create_signing_cert() {
     "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mv "/tmp/${SIGNING_CERT_NAME}.crt" "$LOCAL_SIGNING_CERT_FILE"
 
     # Make the signing certificate trusted by the device
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" mkdir -p "/usr/local/share/ca-certificates"
     "${EXEC_CMD[@]}" "$TARGET" "$SUDO" cp "$LOCAL_SIGNING_CERT_FILE" "/usr/local/share/ca-certificates"
-    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" update-ca-certificates
+    "${EXEC_CMD[@]}" "$TARGET" "$SUDO" sh -c "command -V update-ca-certificates >/dev/null 2>&1 && update-ca-certificates"
 }
 
 # Create a certificate that is trusted by all the entities attached to a main device
