@@ -693,7 +693,7 @@ configure_mtls_mqtt_broker() {
     ## As a workaround the configuration for external settings is created independently without `tedge`
 
     cat << EOF >"/tmp/${DEVICE_ID}-tls-listener.conf"
-listener 8883 ${TARGET_IP}
+listener 8883 0.0.0.0
 allow_anonymous false
 require_certificate true
 use_identity_as_username true
