@@ -590,7 +590,7 @@ configure_mtls_main_agent() {
     LOCAL_CERT_KEY="$4"
 
     # tedge-agent acts as a server for file-transfer	
-    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.bind.address "$TARGET_IP"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.bind.address 0.0.0.0
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.bind.port "8000"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.cert_path "$LOCAL_CERT_FILE"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set http.key_path "$LOCAL_CERT_KEY"
@@ -612,7 +612,7 @@ configure_mtls_c8y_mapper() {
     LOCAL_CERT_KEY="$4"
 
     # c8y-mapper acts as a server for c8y proxy
-    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.bind.address "$TARGET_IP"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.bind.address 0.0.0.0
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.bind.port "8001"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.cert_path "$LOCAL_CERT_FILE"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.proxy.key_path "$LOCAL_CERT_KEY"
