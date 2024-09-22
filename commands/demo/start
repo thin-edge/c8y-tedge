@@ -62,3 +62,24 @@ echo "Running docker compose up -d" >&2
 
 echo "Bootstrapping" >&2
 c8y tedge bootstrap-container tedge "$NAME" "$@"
+
+# Create a default remoteaccess configuration but only if the user has the correct permissions
+MO_ID=$(c8y identity get -n --name "$NAME" --select managedObject.id -o csv)
+if [ -n "$MO_ID" ]; then
+    # Check if the user had correct permissions to use remoteaccess
+    if c8y remoteaccess configurations list -n --device "$MO_ID" --silentStatusCodes 403; then
+        # Add webssh config if it is not already existing
+        c8y remoteaccess configurations get -n --id webssh --device "$MO_ID" --silentStatusCodes 404 ||
+            c8y remoteaccess configurations create-webssh \
+                -n \
+                --device "$MO_ID" \
+                --name "webssh" \
+                --credentialsType USER_PASS \
+                --username iotadmin \
+                --password iotadmin \
+                --force >/dev/null
+    else
+        echo "Warning: We couldn't add the remote access configuration as you don't have the required permissions"
+        echo "To fix this: Add the 'Remote Access' permission to a role like 'Admin' and assign yourself to it"
+    fi
+fi
