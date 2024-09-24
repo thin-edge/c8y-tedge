@@ -3,6 +3,10 @@ set -e
 TIMEOUT=2
 PATTERN=
 
+if [ "$DEBUG" = 1 ]; then
+    set -x
+fi
+
 usage() {
     EXAMPLES=$(examples 2>&1)
     cat << EOT >&2
@@ -68,21 +72,48 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-SD_SERVICE_TYPE=_thin-edge_mqtt._tcp
+scan_tedge() {
+    service_type="$1"
+    FORMAT=
+    if command -V dns-sd >/dev/null 2>&1; then
+        OUTPUT=$(dns-sd -t "$TIMEOUT" -B "$service_type" local | tail +5)
+        FORMAT=dns-sd
+    elif command -V avahi-browse >/dev/null 2>&1; then
+        OUTPUT=$(avahi-browse -d local "$service_type" -t)
+        FORMAT=avahi-browse
+    else
+        echo "Missing dependency. Scanning for thin-edge.io devices requires either avahi-browse or dns-sd to be installed" >&2
+        exit 1
+    fi
 
-if command -V dns-sd >/dev/null 2>&1; then
-    OUTPUT=$(dns-sd -t "$TIMEOUT" -B "$SD_SERVICE_TYPE" local)
-elif command -V avahi-browse >/dev/null 2>&1; then
-    OUTPUT=$(avahi-browse -d local "$SD_SERVICE_TYPE" -t)
-else
-    echo "Missing dependency. Scanning for thin-edge.io devices requires either avahi-browse or dns-sd to be installed" >&2
-    exit 1
-fi
+    if [ "$service_type" = "_thin-edge_mqtt._tcp" ]; then
+        # dns-sd type from original avahi service definition (which was using unsupported characters)
+        DEVICES=$(echo "$OUTPUT" | grep -o "thin-edge.io ([a-zA-Z0-9-]*)" | cut -d' ' -f2- | tr -d '()' | sed 's/$/.local/g' | sort | uniq)
+    else
+        # new dns-sd type (which is compatible with systemd-resolved)
+        case "$FORMAT" in
+            dns-sd)
+                DEVICES=$(echo "$OUTPUT" | awk '{print $7".local"}' | sort | uniq)
+                ;;
+            avahi-browse)
+                # TODO: avahi-browser output is not yet known
+                DEVICES=$(echo "$OUTPUT" | awk '{print $7".local"}' | sort | uniq)
+                echo "Warning: avahi-browse is not yet supported. Please create a ticket on https://github.com/thin-edge/c8y-tedge" >&2
+                ;;
+        esac
+        
+    fi
 
-DEVICES=$(echo "$OUTPUT" | grep -o "thin-edge.io ([a-zA-Z0-9-]*)" | cut -d' ' -f2- | tr -d '()' | sort | uniq)
+    if [ -n "$PATTERN" ]; then
+        echo "$DEVICES" | grep "$PATTERN"
+    else
+        echo "$DEVICES"
+    fi
+}
 
-if [ -n "$PATTERN" ]; then
-    echo "$DEVICES" | grep "$PATTERN"
-else
-    echo "$DEVICES"
-fi
+# Scan for both old and new types in parallel
+{
+    scan_tedge "_tedge._tcp" &
+    scan_tedge "_thin-edge_mqtt._tcp" &
+    wait
+} | sort | uniq
