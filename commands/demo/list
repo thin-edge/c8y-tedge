@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+if [ "${DEBUG:-}" = 1 ]; then
+    set -x
+fi
+
 usage() {
     cat <<EOT >&2
 List the existing tedge-container-demo instances
