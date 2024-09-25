@@ -147,7 +147,20 @@ container_check() {
 
 container_service_check() {
     name="$1"
-    "$C8Y_TEDGE_CONTAINER_CLI" compose ps -a --format '{{.State}}' "$1"
+    # Note: docker compose introduced support for using templates in the --format flag
+    # which allows the service check to be done without additional dependencies.
+    # Newer docker compose supports --format <template>, whereas older versions only support --format <json|pretty>
+    #
+    if "$C8Y_TEDGE_CONTAINER_CLI" compose ps -a --format '{{.State}}' "$1" >/dev/null 2>/dev/null; then
+        # New docker compose ps style
+        "$C8Y_TEDGE_CONTAINER_CLI" compose ps -a --format '{{.State}}' "$1"
+    elif command -V jq >/dev/null 2>&1; then
+        # Prefer parsing output with jq if available
+        "$C8Y_TEDGE_CONTAINER_CLI" compose ps -a --format 'json' "$1" | jq -r '.[].State'
+    else
+        # Fallback to parsing with sed
+        "$C8Y_TEDGE_CONTAINER_CLI" compose ps -a --format 'json' "$1" | sed 's/.*"State":"\([a-zA-Z0-9]*\)".*/\1/g'
+    fi
 }
 
 
