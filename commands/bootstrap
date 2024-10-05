@@ -115,6 +115,7 @@ fi
 #
 # Parse args
 #
+POSITIONAL_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --examples)
@@ -177,14 +178,20 @@ while [ $# -gt 0 ]; do
             exit 1
             ;;
         *)
-            if [ -z "$TARGET" ]; then
-                TARGET="$1"
-            elif [ -z "$DEVICE_ID" ]; then
-                DEVICE_ID="$1"
-            fi
+            POSITIONAL_ARGS+=("$1")
     esac
     shift
 done
+
+set -- "${POSITIONAL_ARGS[@]}"
+
+if [ $# -ge 1 ]; then
+    TARGET="$1"
+fi
+
+if [ $# -ge 2 ]; then
+    DEVICE_ID="$2"
+fi
 
 # Set default bootstrap type (based on what dependencies are available)
 if [ -z "$BOOTSTRAP_TYPE" ]; then
