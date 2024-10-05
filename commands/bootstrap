@@ -102,6 +102,16 @@ c8y tedge bootstrap --ssh-user root --scan --pattern "rpi3"
 EOT
 }
 
+# Load .env automatically
+# Load before parsing arguments so that explicit flags can override any set values
+if [ -f .env ]; then
+    echo "Loading .env file" >&2
+    set -o allexport
+    # shellcheck disable=SC1091
+    . .env ||:
+    set +o allexport
+fi
+
 #
 # Parse args
 #
@@ -175,15 +185,6 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-
-# Load .env automatically
-if [ -f .env ]; then
-    echo "Loading .env file" >&2
-    set -o allexport
-    # shellcheck disable=SC1091
-    . .env ||:
-    set +o allexport
-fi
 
 # Set default bootstrap type (based on what dependencies are available)
 if [ -z "$BOOTSTRAP_TYPE" ]; then
