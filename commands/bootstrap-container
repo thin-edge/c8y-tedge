@@ -279,7 +279,8 @@ do_action() {
         "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id "$DEVICE_ID" 2>/dev/null ||:
     else
         # Default to the hostname of the device
-        "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id '${HOSTNAME:-$HOST}' 2>/dev/null ||:
+        # shellcheck disable=SC2016
+        "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id '${DEVICE_ID:-tedge_$(hostname)}' 2>/dev/null ||:
     fi
 
     # Get public cert

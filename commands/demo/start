@@ -65,7 +65,7 @@ echo "Running docker compose up -d" >&2
 (cd "$PROJECT_DIR" && docker compose up -d)
 
 echo "Bootstrapping" >&2
-c8y tedge bootstrap-container tedge "$NAME" "$@"
+c8y tedge bootstrap-container tedge --device-id "$NAME" "$@"
 
 # Create a default remoteaccess configuration but only if the user has the correct permissions
 MO_ID=$(c8y identity get -n --name "$NAME" --select managedObject.id -o csv)
