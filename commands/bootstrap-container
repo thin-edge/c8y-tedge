@@ -64,6 +64,16 @@ c8y tedge bootstrap-container container01
 EOT
 }
 
+# Load .env automatically so it plays nicely with docker compose which also does this
+# Load before parsing arguments so that explicit flags can override any set values
+if [ -f .env ]; then
+    echo "Loading .env file" >&2
+    set -o allexport
+    # shellcheck disable=SC1091
+    . .env ||:
+    set +o allexport
+fi
+
 #
 # Parse args
 #
@@ -113,14 +123,6 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-
-# Load .env automatically so it plays nicely with docker compose which also does this
-if [ -f .env ]; then
-    echo "Loading .env file" >&2
-    set -o allexport
-    . .env ||:
-    set +o allexport
-fi
 
 # Try auto detecting container cli (based on what is available)
 if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
