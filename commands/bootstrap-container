@@ -77,6 +77,7 @@ fi
 #
 # Parse args
 #
+POSITIONAL_ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --examples)
@@ -115,14 +116,20 @@ while [ $# -gt 0 ]; do
             exit 1
             ;;
         *)
-            if [ -z "$TARGET" ]; then
-                TARGET="$1"
-            elif [ -z "$DEVICE_ID" ] && [ -n "$1" ]; then
-                DEVICE_ID="$1"
-            fi
+            POSITIONAL_ARGS+=("$1")
     esac
     shift
 done
+
+set -- "${POSITIONAL_ARGS[@]}"
+
+if [ $# -ge 1 ]; then
+    TARGET="$1"
+fi
+
+if [ $# -ge 2 ]; then
+    DEVICE_ID="$2"
+fi
 
 # Try auto detecting container cli (based on what is available)
 if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
