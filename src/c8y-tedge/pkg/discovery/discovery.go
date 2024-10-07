@@ -11,13 +11,47 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/mdns"
+
 	"github.com/grandcat/zeroconf"
 )
 
-var ThinEdgeServiceType = "_thin-edge_mqtt._tcp"
+// var ThinEdgeServiceType = "_thin-edge_mqtt._tcp"
+var ThinEdgeServiceType = "_tedge._tcp"
 var DefaultDomain = ".local"
 
-func Discover(timeout time.Duration) error {
+func DiscoverHashicorp(serviceType string, domain string, timeout time.Duration) error {
+	// Discover all services on the network (e.g. _workstation._tcp)
+	var err error
+
+	entriesCh := make(chan *mdns.ServiceEntry, 4)
+	go func() {
+		for entry := range entriesCh {
+			fmt.Printf("Got new entry: %v\n", entry)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	log.Printf("Starting to scan. type=%s, domain=%s\n", serviceType, domain)
+	defer cancel()
+
+	// Start the lookup
+	// mdns.Query(&mdns.QueryParam{
+	// 	DisableIPv6: true,
+	// })
+	err = mdns.Lookup(serviceType, entriesCh)
+	close(entriesCh)
+	if err != nil {
+		log.Fatalln("Failed to browse:", err.Error())
+	}
+
+	<-ctx.Done()
+	// Wait some additional time to see debug messages on go routine shutdown.
+	time.Sleep(1 * time.Second)
+	return nil
+}
+
+func Discover(serviceType string, domain string, timeout time.Duration) error {
 	// Discover all services on the network (e.g. _workstation._tcp)
 	resolver, err := zeroconf.NewResolver(nil)
 	if err != nil {
@@ -27,7 +61,8 @@ func Discover(timeout time.Duration) error {
 	entries := make(chan *zeroconf.ServiceEntry)
 	go func(results <-chan *zeroconf.ServiceEntry) {
 		for entry := range results {
-			if device_id := GetInstanceName(entry.Instance); device_id != "" {
+			log.Println("Instance: ", entry.Instance)
+			if device_id := ParseInstance(entry.Instance); device_id != "" {
 				fmt.Printf("%s%s\n", device_id, DefaultDomain)
 			}
 		}
@@ -35,17 +70,50 @@ func Discover(timeout time.Duration) error {
 	}(entries)
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	log.Printf("Starting to scan. type=%s, domain=%s\n", serviceType, domain)
 	defer cancel()
-	err = resolver.Browse(ctx, ThinEdgeServiceType, "local.", entries)
+	err = resolver.Browse(ctx, serviceType, domain, entries)
 	if err != nil {
 		log.Fatalln("Failed to browse:", err.Error())
 	}
 
 	<-ctx.Done()
+	// Wait some additional time to see debug messages on go routine shutdown.
+	time.Sleep(1 * time.Second)
 	return nil
 }
 
+func ParseInstance(instance string) (device_id string) {
+	// The Instance Name is the device_id
+	if !strings.Contains(instance, "(") {
+		return instance
+	}
+
+	// Parse the hostname from the instance
+	i := strings.Index(instance, "(")
+	j := strings.Index(instance, ")")
+	if i != -1 && j != -1 && j > i {
+		return instance[i+1 : j]
+	}
+	return
+}
+
 func GetInstanceName(line string) (device_id string) {
+	if !strings.Contains(line, "local.") {
+		return
+	}
+	fields := strings.Fields(line)
+	if len(fields) < 7 {
+		return
+	}
+	instanceName := strings.Join(fields[6:], " ")
+
+	// The Instance Name is the device_id
+	if !strings.Contains(instanceName, "(") {
+		return instanceName
+	}
+
+	// Parse the hostname from the instance
 	i := strings.Index(line, "(")
 	if i == -1 {
 		return
@@ -64,9 +132,12 @@ func Insert[T cmp.Ordered](ts []T, t T) []T {
 }
 
 type FilterOptions struct {
-	After   time.Duration
-	Pattern string
-	Timeout time.Duration
+	After       time.Duration
+	Pattern     string
+	Timeout     time.Duration
+	ServiceType string
+	Domain      string
+	UseNative   bool
 }
 
 func NativeDiscovery(options FilterOptions) error {
@@ -76,6 +147,7 @@ func NativeDiscovery(options FilterOptions) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "dns-sd", "-t", timeoutSec, "-B", ThinEdgeServiceType, strings.Trim(DefaultDomain, "."))
+	// cmd := exec.CommandContext(ctx, "dns-sd", "-t", timeoutSec, "-B", ThinEdgeServiceType, DefaultDomain)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err

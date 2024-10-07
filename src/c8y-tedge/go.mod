@@ -8,6 +8,7 @@ require (
 	github.com/docker/compose/v2 v2.24.1
 	github.com/docker/docker v25.0.0+incompatible
 	github.com/grandcat/zeroconf v1.0.0
+	github.com/hashicorp/mdns v1.0.5
 	github.com/spf13/cobra v1.8.0
 )
 

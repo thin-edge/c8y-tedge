@@ -5,4 +5,6 @@ output.xml
 bootstrapper/c8y-tedge/c8y-tedge
 src/c8y-tedge/c8y-tedge
 /c8y-tedge
-/pkg/mod/cache/
+/pkg/mod/
+src/c8y-tedge/dist/
+bin/
