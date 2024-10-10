@@ -13,6 +13,7 @@ PATTERN="${PATTERN:-.+}"
 BOOTSTRAP_TYPE="${BOOTSTRAP_TYPE:-}"
 SUDO=${SUDO:-}
 OFFLINE_MODE=${OFFLINE_MODE:-0}
+REMOVE_KNOWN_HOST_ENTRY_ON_FAILURE=${REMOVE_KNOWN_HOST_ENTRY_ON_FAILURE:-1}
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -823,6 +824,31 @@ SCP_CMD=remote_scp
 #
 REMOTE_PATH="PATH=\$PATH:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 
+check_ssh_connection() {
+    target="$1"
+    host="${target#*@}"
+
+    if "${EXEC_CMD[@]}" "$target" $SUDO echo "SSH Connection successful"; then
+        return 0
+    fi
+
+    if [ "$REMOVE_KNOWN_HOST_ENTRY_ON_FAILURE" = 1 ]; then
+        if command -V ssh-keygen >/dev/null 2>&1; then
+            if ssh-keygen -R "$host"; then
+                echo "Removed device from ssh known_hosts" >&2
+
+                # Try again to connect
+                if "${EXEC_CMD[@]}" "$target" $SUDO echo "SSH Connection successful"; then
+                    return 0
+                fi
+            fi
+        fi
+    fi
+
+    echo "Failed to connect to device. target=$target" >&2
+    return 1
+}
+
 do_action() {
     if [ $# -gt 0 ]; then
         TARGET="$1"
@@ -851,6 +877,12 @@ do_action() {
         URL="$C8Y_DOMAIN"
     else
         URL=$(c8y sessions get --select host -o csv | sed -E 's|https?://||')
+    fi
+
+    # Check if an ssh connection can be established to the device, if not fail early
+    if ! check_ssh_connection "$TARGET"; then
+        echo "Could not connect to the device. Aborting. device=$TARGET" >&2
+        exit 1
     fi
 
     # Get identity
@@ -948,7 +980,7 @@ do_action() {
 
         # Open device management page for the device
         if [ "$OPEN_WEBSITE" = 1 ]; then
-            c8y identity get -n --name "$DEVICE_ID" | c8y applications open --application devicemanagement --page "$WEBSITE_PAGE"
+            c8y identity get -n --name "$DEVICE_ID" --retries 5 | c8y applications open --application devicemanagement --page "$WEBSITE_PAGE"
         fi
     fi
 }
