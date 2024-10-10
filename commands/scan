@@ -116,4 +116,4 @@ scan_tedge() {
     scan_tedge "_tedge._tcp" &
     scan_tedge "_thin-edge_mqtt._tcp" &
     wait
-} | sort | uniq
+} | sort | uniq | grep -v "^$"
