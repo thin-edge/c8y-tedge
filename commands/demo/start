@@ -14,6 +14,11 @@ and bootstrap it using your current go-c8y-cli session.
 
 c8y tedge demo start <DEVICE_NAME>
 
+FLAGS
+
+    --skip-download         Skip downloading of the docker-compose.yaml file if it already exists.
+                            Useful if you're manually editing the docker-compose.yaml for dev purposes
+
 Examples
 
   c8y tedge demo start mydevice001
@@ -27,11 +32,17 @@ fail() {
     exit 1
 }
 
+FORCE_DOWNLOAD_COMPOSE=1
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --help|-h)
             usage
             exit 0
+            ;;
+        --skip-download)
+            FORCE_DOWNLOAD_COMPOSE=0
+            shift
             ;;
         *)
             break
@@ -52,13 +63,15 @@ export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
 echo "Creating demo folder: $PROJECT_DIR" >&2
 mkdir -p "$PROJECT_DIR"
 
-echo "Downloading the docker-compose.yaml file" >&2
-if command -V wget >/dev/null 2>&1; then
-    wget -q -O - "$COMPOSE_URL" > "$COMPOSE_FILE"
-elif command -V curl >/dev/null 2>&1; then
-    curl -LSs "$COMPOSE_URL" > "$COMPOSE_FILE"
-else
-    fail "Missing required dependencies: Either curl or wget is needed"
+if [ "$FORCE_DOWNLOAD_COMPOSE" = 1 ] || [ ! -f "$COMPOSE_FILE" ]; then
+    echo "Downloading the docker-compose.yaml file" >&2
+    if command -V wget >/dev/null 2>&1; then
+        wget -q -O - "$COMPOSE_URL" > "$COMPOSE_FILE"
+    elif command -V curl >/dev/null 2>&1; then
+        curl -LSs "$COMPOSE_URL" > "$COMPOSE_FILE"
+    else
+        fail "Missing required dependencies: Either curl or wget is needed"
+    fi
 fi
 
 echo "Running docker compose up -d" >&2
