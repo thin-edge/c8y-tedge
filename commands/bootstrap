@@ -273,6 +273,7 @@ create_ca() {
 
     if ! c8y devicemanagement certificates create \
         -n \
+        --force \
         --name "$CA_COMMON_NAME" \
         --autoRegistrationEnabled \
         --status ENABLED \
@@ -395,6 +396,7 @@ create_self_signed() {
     echo "Certificate CN: $DEVICE_ID" >&2
     if ! c8y devicemanagement certificates create \
         -n \
+        --force \
         --name "$DEVICE_ID" \
         --autoRegistrationEnabled \
         --status ENABLED \
