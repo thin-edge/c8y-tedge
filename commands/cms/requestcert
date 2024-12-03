@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -e
+
+EXTERNAL_ID=${EXTERNAL_ID:-}
+DEVICE_ONE_TIME_PASSWORD=${DEVICE_ONE_TIME_PASSWORD:-}
+CERT_FILE=${CERT_FILE:-}
+RESTART=${RESTART:-1}
+DEBUG=${DEBUG:-0}
+QR_CODE=${QR_CODE:-1}
+
+help() {
+    cat <<EOT
+c8y tedge cms requestcert [DEVICE_ID] [--one-time-password <DEVICE_ONE_TIME_PASSWORD>]
+
+Request a device certificate from Cumulocity
+
+Positional Args:
+  DEVICE_ID             Device ID to enrol, e.g. tedge0001
+
+Flags
+  --url <string>            Cumulocity Url. Defaults to 'c8y.url' setting.
+  --one-time-password <string>  Device one-time-password used to request the first certificate from the platform
+  --reconnect               Reconnect the mappers after replacing the certificate
+  --qr|--no-qr              Show/hide Enrolment QR Code
+  --no-reconnect            Don't reconnect the mappers after replacing the certificate
+  --help, -h                Show this help
+
+Examples
+
+  c8y tedge cms requestcert mydevice001 --url example.c8y.io
+  # Request a certificate and use a device generated one-time-password which is displayed to the user
+
+  c8y tedge cms requestcert mydevice001 --one-time-password 8ajas7d013jdsd671kjd0lk
+  # Request a certificate using an already known device one-time-password (that should be trusted by the platform already)
+
+EOT
+}
+
+POSITIONAL_ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --url)
+            C8Y_HOST="$2"
+            shift
+            ;;
+        --one-time-password)
+            DEVICE_ONE_TIME_PASSWORD="$2"
+            shift
+            ;;
+        --qr)
+            QR_CODE=1
+            ;;
+        --no-qr)
+            QR_CODE=0
+            ;;
+        --reconnect)
+            RESTART=1
+            ;;
+        --no-reconnect)
+            RESTART=0
+            ;;
+        --help|-h)
+            help
+            exit 0
+            ;;
+        --debug)
+            DEBUG=1
+            ;;
+        --*|*-)
+            echo "Unknown flag" >&2
+            help
+            exit 1
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+            ;;
+    esac
+    shift
+done
+
+set -- "${POSITIONAL_ARGS[@]}"
+
+main() {
+    if [ "$(tedge config get c8y.url)" != "$C8Y_HOST" ]; then
+        echo "Setting c8y.url $C8Y_HOST" >&2
+        tedge config set c8y.url "$C8Y_HOST"
+    fi
+
+    if [ "$DISPLAY_DEVICE_ONE_TIME_PASSWORD" = 1 ]; then
+        echo
+        echo "Please register the device in your Cumulocity tenant (the device will poll every 5 seconds)"
+        echo
+        if [ -n "$QR_CODE" ]; then
+            echo "Scan the QR Code below with your phone"
+            echo
+            curl qrcode.show -d "https://$C8Y_HOST/apps/devicemanagement/index.html#/deviceregistration?externalId=$EXTERNAL_ID&one-time-password=$DEVICE_ONE_TIME_PASSWORD"
+            echo "  Device:      $EXTERNAL_ID"
+            echo "  Device Code: $DEVICE_ONE_TIME_PASSWORD"
+            echo "  Cumulocity:  https://$C8Y_HOST/apps/devicemanagement/index.html#/deviceregistration?externalId=$EXTERNAL_ID&one-time-password=$DEVICE_ONE_TIME_PASSWORD"
+            echo
+        else
+            echo "  Cumulocity:  https://$C8Y_HOST/apps/devicemanagement/index.html#/deviceregistration"
+            echo "  Device:      $EXTERNAL_ID"
+            echo "  Device Code: $DEVICE_ONE_TIME_PASSWORD"
+            echo
+        fi
+        echo
+        echo "Or run command"
+        echo
+        echo "  c8y deviceregistration register-ca --id '$EXTERNAL_ID' --one-time-password '$DEVICE_ONE_TIME_PASSWORD'"
+        echo
+    fi
+
+    if ! tedge cert download c8y --retry-every 5s --max-timeout 5m --device-id "$EXTERNAL_ID" --token "$DEVICE_ONE_TIME_PASSWORD" 2>/dev/null; then
+        echo "Failed to get device certificate." >&2
+        exit 1
+    fi
+
+    # Restart thin-edge.io
+    if [ "$RESTART" = 1 ]; then
+        echo "Reconnecting mapper" >&2
+        tedge reconnect c8y
+    fi
+}
+
+#
+# Main
+#
+
+# Set defaults
+if [ "$DEBUG" = 1 ]; then
+    set -x
+fi
+
+if [ $# -lt 1 ]; then
+    printf "Missing required positional argument. DEVICE_ID\n\n" >&2
+    help
+    exit 1
+fi
+
+if [ -z "$C8Y_HOST" ]; then
+    C8Y_HOST=$(tedge config get c8y.url)
+fi
+# Normalize it by stripping the scheme
+# shellcheck disable=SC2001
+C8Y_HOST=$(echo "$C8Y_HOST" | sed 's|.*://||g')
+
+EXTERNAL_ID="$1"
+
+if [ -z "$DEVICE_ONE_TIME_PASSWORD" ]; then
+    # Change back to password length of 32 once the server fix has been deployed
+    DEVICE_ONE_TIME_PASSWORD=$(c8y template execute --template "_.Password(31)")
+    DISPLAY_DEVICE_ONE_TIME_PASSWORD=1
+fi
+
+main
