@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -e
+
+c8y_bulk_registration() {
+    EXTERNAL_ID="$1"
+    CREDENTIALS="$2"
+    DEVICE_TYPE="thin-edge.io"
+    if [ $# -gt 2 ]; then
+        DEVICE_TYPE="$3"
+    fi
+
+    REG_FILE="/tmp/${EXTERNAL_ID}.csv"
+
+    cat << EOT > "$REG_FILE"
+"ID","CREDENTIALS","AUTH_TYPE","TYPE","NAME","com_cumulocity_model_Agent.active"
+"$EXTERNAL_ID","$CREDENTIALS",CERTIFICATES,"$DEVICE_TYPE","$EXTERNAL_ID",true
+EOT
+
+    echo "Manually registering device: $EXTERNAL_ID (type=$DEVICE_TYPE)" >&2
+    if ! c8y api POST devicecontrol/bulkNewDeviceRequests --file "$REG_FILE" --force; then
+        echo "Warning: Failed to manually register device (via c8y bulk registration API): $EXTERNAL_ID" >&2
+        exit 1
+    fi
+    rm -f "$REG_FILE"
+}
+
+c8y_bulk_registration "$1" "$2"
