@@ -18,7 +18,8 @@ REMOVE_KNOWN_HOST_ENTRY_ON_FAILURE=${REMOVE_KNOWN_HOST_ENTRY_ON_FAILURE:-1}
 usage() {
     EXAMPLES=$(examples 2>&1)
     cat << EOT >&2
-Bootstrap a thin-edge.io device using ssh.
+Bootstrap a thin-edge.io device using ssh. thin-edge.io will be installed on the device
+if it is not already present.
 The device must be reachable via ssh on the local network.
 
 The supported bootstraping methods are described below:
@@ -851,6 +852,13 @@ check_ssh_connection() {
     return 1
 }
 
+install_tedge_if_missing() {
+    if ! "${EXEC_CMD[@]}" "$target" tedge --version; then
+        echo "Installing thin-edge.io as it is missing on the device ($target)" >&2
+        "${EXEC_CMD[@]}" "$target" sh -c \'wget -O - thin-edge.io/install.sh | sh -s\'
+    fi
+}
+
 do_action() {
     if [ $# -gt 0 ]; then
         TARGET="$1"
@@ -886,6 +894,9 @@ do_action() {
         echo "Could not connect to the device. Aborting. device=$TARGET" >&2
         exit 1
     fi
+
+    # Install thin-edge.io
+    install_tedge_if_missing
 
     # Get identity
     DEVICE_ID=$(get_device_id "$TARGET" "$DEVICE_ID")
