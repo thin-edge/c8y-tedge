@@ -919,8 +919,9 @@ do_action() {
         if [ "$RENEW_CERT" = 0 ] && [ "$IS_CONNECTED" = 1 ]; then
             echo "tedge is already connected, skipping certificate generation" >&2
         else
-            echo "tedge is already connected, so disconnecting before bootstrapping" >&2
+            # ensure that tedge is disconnected before setting url and generating new certificate
             "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge disconnect c8y ||:
+            echo "Setting tedge c8y.url to $URL" >&2
             "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set c8y.url "$URL"
 
             case "$BOOTSTRAP_TYPE" in
