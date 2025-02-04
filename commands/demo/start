@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 set -e
 
 if [ "${DEBUG:-}" = 1 ]; then
@@ -27,17 +27,26 @@ fail() {
     exit 1
 }
 
+BOOTSTRAP=1
+POSITIONAL_ARGS=()
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --help|-h)
             usage
             exit 0
             ;;
+        --skip-bootstrap)
+            BOOTSTRAP=0
+            ;;
         *)
-            break
+            POSITIONAL_ARGS+=("$1")
             ;;
     esac
+    shift
 done
+
+set -- "${POSITIONAL_ARGS[@]}"
 
 if [ $# -lt 1 ]; then
     fail "Missing device name (aka project name)"
@@ -63,6 +72,11 @@ fi
 
 echo "Running docker compose up -d" >&2
 (cd "$PROJECT_DIR" && docker compose up -d)
+
+if [ "$BOOTSTRAP" = 0 ]; then
+    echo "Skipping bootstrapping. You are on your own now ;)" >&2
+    exit 0
+fi
 
 echo "Bootstrapping" >&2
 c8y tedge bootstrap-container tedge --device-id "$NAME" "$@"
