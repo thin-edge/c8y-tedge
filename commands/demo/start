@@ -12,9 +12,12 @@ Start a new tedge-container-demo instance
 It will download the latest docker-compose from the https://github.com/thin-edge/tedge-demo-container repository
 and bootstrap it using your current go-c8y-cli session.
 
-c8y tedge demo start <DEVICE_NAME>
+c8y tedge demo start [DEVICE_NAME]
 
 Examples
+
+  c8y tedge demo start
+  # Start a tedge-container-demo using a randomly generated device name
 
   c8y tedge demo start mydevice001
   # Start a tedge-container-demo using the device name 'mydevice001'
@@ -39,11 +42,13 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ $# -lt 1 ]; then
-    fail "Missing device name (aka project name)"
+if [ $# -gt 0 ]; then
+    NAME="$1"
+    shift
+else
+    NAME=$(c8y template execute --template "'tedge_' + _.Hex(8)")
+    echo "Using randomly generated device name: $NAME" >&2
 fi
-NAME="$1"
-shift
 
 COMPOSE_URL="https://raw.githubusercontent.com/thin-edge/tedge-demo-container/main/demos/docker-compose/device/docker-compose.yaml"
 PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"

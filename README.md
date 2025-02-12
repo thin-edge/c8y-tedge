@@ -24,6 +24,20 @@ c8y extension install thin-edge/c8y-tedge
 
 ## Examples
 
+### Start a demo container
+
+Start a demo container using a randomly generated device name:
+
+```sh
+c8y tedge demo start
+```
+
+Or you can specify the device name to be used:
+
+```
+c8y tedge demo start tedge0001
+```
+
 ### Bootstrap device via ssh
 
 Bootstrap a thin-edge.io enable device using SSH.
