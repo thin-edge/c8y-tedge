@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+set -e
+CA_NAME="${CA_NAME:-}"
+LEAF_EXPIRE_DAYS="${LEAF_EXPIRE_DAYS:-365}"
+
+usage() {
+    EXAMPLES=$(examples 2>&1)
+    cat << EOT >&2
+Sign a device certificate using a local CA certificate which was created
+by the "c8y tedge local-ca create" command
+
+USAGE
+  c8y tedge local-ca sign <CSR_FILE>
+
+ARGUMENTS
+  CSR_FILE                File path to the Certificate Signing Request
+
+FLAGS
+  --ca-name <NAME>                  CA certificate name (created via the 'c8y tedge local-ca create' command)
+  --expires <DAYS>                  Number of days the CA certificate should be valid for
+  --verbose                         Enable verbose logging
+  --debug                           Enable debug logging
+  --examples                        Shows examples
+  -h, --help                        Show this help
+
+$EXAMPLES
+
+EOT
+}
+
+examples() {
+    cat << EOT >&2
+EXAMPLES
+
+# Sign a device CSR using the default local CA certificate
+c8y tedge local-ca sign ./device.csr
+
+# Sign a device CSR using a local-ca called "dev" (created via "c8y tedge local-ca create dev")
+c8y tedge local-ca sign ./device.csr --ca-name dev
+
+EOT
+}
+
+#
+# Parse args
+#
+POSITIONAL_ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+    
+        --examples)
+            examples
+            exit 0
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --expires)
+            LEAF_EXPIRE_DAYS="$2"
+            shift
+            ;;
+        --ca-name)
+            CA_NAME="$2"
+            shift
+            ;;
+        --verbose|-v)
+            export C8Y_SETTINGS_DEFAULTS_VERBOSE="true"
+            ;;
+        --debug)
+            set -x
+            export C8Y_SETTINGS_DEFAULTS_DEBUG="true"
+            ;;
+        --*|-*)
+            printf '\nERROR: Unknown flag. %s\n\n' "$1" >&2
+            usage
+            exit 1
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+    esac
+    shift
+done
+
+set -- "${POSITIONAL_ARGS[@]}"
+
+if [ -z "$CA_NAME" ]; then
+    CA_NAME="tedge-ca-$(whoami)"
+fi
+
+if [ $# -eq 0 ]; then
+    echo "Error. Missing required argument" >&2
+    usage
+    exit 1  
+fi
+DEVICE_CSR="$1"
+
+CA_CERT_FILE="${CA_CERT_FILE:-$HOME/$CA_NAME.crt}"
+CA_CERT_KEY="${CA_CERT_KEY:-$HOME/$CA_NAME.key}"
+
+sign_csr() {
+    csr_file="$1"
+    CERT_EXT=$(cat << EOF
+authorityKeyIdentifier=keyid
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyAgreement
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName=DNS:localhost,IP:127.0.0.1
+EOF
+    )
+
+    DEVICE_CERT_CHAIN="${csr_file}.tmp"
+    openssl x509 -req \
+        -in <(cat "$csr_file") \
+        -out "$DEVICE_CERT_CHAIN" \
+        -CA "$CA_CERT_FILE" \
+        -CAkey "$CA_CERT_KEY" \
+        -extfile <(echo "$CERT_EXT") \
+        -CAcreateserial \
+        -days "$LEAF_EXPIRE_DAYS"
+
+    # Build certificate chain (from leaf cert to the signing cert)
+    cat "$CA_CERT_FILE" >> "$DEVICE_CERT_CHAIN"
+
+    # output to stdout
+    cat "$DEVICE_CERT_CHAIN"
+    rm -f "$DEVICE_CERT_CHAIN"
+}
+
+sign_csr "$DEVICE_CSR"

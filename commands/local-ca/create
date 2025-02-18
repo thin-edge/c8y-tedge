@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+set -e
+NAME=${NAME:-}
+CA_EXPIRE_DAYS="${CA_EXPIRE_DAYS:-730}"
+CA_OU="${CA_OU:-dev}"
+OVERWRITE="${OVERWRITE:-0}"
+
+usage() {
+    EXAMPLES=$(examples 2>&1)
+    cat << EOT >&2
+Create a local CA certificate used to sign device certificates
+
+USAGE
+  c8y tedge local-ca create [NAME]
+
+ARGUMENTS
+  NAME                Name of the signing certificate
+
+FLAGS
+  --expires <DAYS>                  Number of days the CA certificate should be valid for
+  --overwrite                       Overwrite any existing certificates
+  --verbose                         Enable verbose logging
+  --debug                           Enable debug logging
+  --examples                        Shows examples
+  -h, --help                        Show this help
+
+$EXAMPLES
+
+EOT
+}
+
+examples() {
+    cat << EOT >&2
+EXAMPLES
+
+# Create a local CA certificate (using the default value)
+c8y tedge local-ca create
+
+# Create a local CA certificate using a given name
+c8y tedge local-ca create dev
+
+EOT
+}
+
+#
+# Parse args
+#
+POSITIONAL_ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+    
+        --examples)
+            examples
+            exit 0
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --expires)
+            CA_EXPIRE_DAYS="$2"
+            shift
+            ;;
+        --ca-ou)
+            CA_OU="$2"
+            shift
+            ;;
+        --overwrite)
+            OVERWRITE=1
+            ;;
+        --verbose|-v)
+            export C8Y_SETTINGS_DEFAULTS_VERBOSE="true"
+            ;;
+        --debug)
+            set -x
+            export C8Y_SETTINGS_DEFAULTS_DEBUG="true"
+            ;;
+        --*|-*)
+            printf '\nERROR: Unknown flag. %s\n\n' "$1" >&2
+            usage
+            exit 1
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+    esac
+    shift
+done
+
+set -- "${POSITIONAL_ARGS[@]}"
+
+if [ $# -eq 0 ]; then
+    NAME="tedge-ca-$(whoami)"
+else
+    NAME="$1"
+fi
+
+CA_CERT_FILE="${CA_CERT_FILE:-$HOME/$NAME.crt}"
+CA_CERT_KEY="${CA_CERT_KEY:-$HOME/$NAME.key}"
+
+
+create_ca() {
+    name="$1"
+    #
+    # Create new ca (signing certificate)
+    #
+    if [ "$OVERWRITE" = 1 ]; then
+        rm -f "$CA_CERT_KEY"
+        rm -f "$CA_CERT_FILE"
+    fi
+
+    if [ -f "$CA_CERT_KEY" ] && [ -f "$CA_CERT_FILE" ]; then
+        echo "Using existing CA certificate. cert=$CA_CERT_FILE" >&2
+    else
+        openssl req \
+            -new \
+            -x509 \
+            -days "$CA_EXPIRE_DAYS" \
+            -extensions v3_ca \
+            -nodes \
+            -subj "/O=thin-edge/OU=${CA_OU}/CN=${name}" \
+            -keyout "$CA_CERT_KEY" \
+            -out "$CA_CERT_FILE" >/dev/null 2>&1
+    fi
+
+    FINGERPRINT=$(openssl x509 -fingerprint -noout -in "$CA_CERT_FILE" | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+    if c8y devicemanagement certificates get --id "$FINGERPRINT" >/dev/null 2>&1; then
+        echo "Certificate has already been uploaded to c8y. fingerprint=$FINGERPRINT" >&2
+        return
+    fi
+
+    if ! c8y devicemanagement certificates create \
+        -n \
+        --force \
+        --name "$name" \
+        --autoRegistrationEnabled \
+        --status ENABLED \
+        --file "$CA_CERT_FILE" \
+        --silentExit --silentStatusCodes 409; then
+        echo "failed to upload CA certificate" >&2
+        exit 1
+    fi
+    echo "Uploaded certificate" >&2
+
+    echo
+    echo "  private key: $CA_CERT_KEY"
+    echo "  public key:  $CA_CERT_FILE"
+    echo
+}
+
+create_ca "$NAME"
