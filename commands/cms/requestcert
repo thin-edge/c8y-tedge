@@ -7,6 +7,7 @@ CERT_FILE=${CERT_FILE:-}
 RESTART=${RESTART:-1}
 DEBUG=${DEBUG:-0}
 QR_CODE=${QR_CODE:-1}
+OPEN_WEBSITE=${OPEN_WEBSITE:-1}
 
 help() {
     cat <<EOT
@@ -120,6 +121,11 @@ main() {
     if [ "$RESTART" = 1 ]; then
         echo "Reconnecting mapper" >&2
         tedge reconnect c8y
+    fi
+
+    # Open device management page for the device
+    if [ "$OPEN_WEBSITE" = 1 ]; then
+        c8y identity get -n --name "$EXTERNAL_ID" --retries 5 | c8y applications open --application devicemanagement --page "device-info"
     fi
 }
 
