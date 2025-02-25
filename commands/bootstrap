@@ -14,6 +14,7 @@ BOOTSTRAP_TYPE="${BOOTSTRAP_TYPE:-}"
 SUDO=${SUDO:-}
 OFFLINE_MODE=${OFFLINE_MODE:-0}
 REMOVE_KNOWN_HOST_ENTRY_ON_FAILURE=${REMOVE_KNOWN_HOST_ENTRY_ON_FAILURE:-1}
+DEVICE_CODE=${DEVICE_CODE:-}
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -62,6 +63,7 @@ FLAGS
   --skip-website                    Don't open the Cumulocity IoT Device Management application
   --page <STRING>                   Which Device Management page to open. Defaults to device-info
   --type <local-ca|self-signed>     Certificate signing method. Accepts local-ca (default), self-signed
+  --code <STRING>                   Cumulocity CA device code used for one-time enrolment
   --mtls                            Enable mTLS for all local connections over MQTT and HTTP
   --main-device <MAIN_DEVICE>       Main device hostname or ip address to connect to via ssh. This is only used when enabling mTLS on a child device.
   --scan                            Bootstrap devices found by a scan
@@ -101,6 +103,9 @@ c8y tedge bootstrap root@mydevice.local --skip-website
 # Bootstrap any devices found during a scan
 c8y tedge bootstrap --ssh-user root --scan --pattern "rpi3"
 
+# Bootstrap device using Cumulocity CA
+c8y tedge bootstrap --type c8y-ca root@mydevice.local
+
 EOT
 }
 
@@ -138,6 +143,11 @@ while [ $# -gt 0 ]; do
             ;;
         --type)
             BOOTSTRAP_TYPE="$2"
+            shift
+            ;;
+        --code)
+            # Only used for Cumulocity CA
+            DEVICE_CODE="$2"
             shift
             ;;
         --mtls)
@@ -757,18 +767,41 @@ configure_mtls_mqtt_client() {
 }
 
 c8y_bulk_registration() {
-    EXTERNAL_ID="$1"
-    DEVICE_TYPE="thin-edge.io"
-    if [ $# -gt 1 ]; then
-        DEVICE_TYPE="$2"
-    fi
+    EXTERNAL_ID=""
+    DEVICE_TYPE="${DEVICE_TYPE:-thin-edge.io}"
+    DEVICE_CODE=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --device-id)
+                EXTERNAL_ID="$2"
+                shift
+                ;;
+            --device-type)
+                DEVICE_TYPE="$2"
+                shift
+                ;;
+            --device-code)
+                DEVICE_CODE="$2"
+                shift
+                ;;
+        esac
+        shift
+    done
 
     REG_FILE="/tmp/${EXTERNAL_ID}.csv"
 
-    cat << EOT > "$REG_FILE"
+    if [ -n "$DEVICE_CODE" ]; then
+        cat << EOT > "$REG_FILE"
+"ID","CREDENTIALS","AUTH_TYPE","TYPE","NAME","com_cumulocity_model_Agent.active"
+"$EXTERNAL_ID","$DEVICE_CODE",CERTIFICATES,"$DEVICE_TYPE","$EXTERNAL_ID",true
+EOT
+    else
+        cat << EOT > "$REG_FILE"
 "ID","AUTH_TYPE","TYPE","NAME","com_cumulocity_model_Agent.active"
 "$EXTERNAL_ID",CERTIFICATES,"$DEVICE_TYPE","$EXTERNAL_ID",true
 EOT
+    fi
 
     echo "Manually registering device: $EXTERNAL_ID (type=$DEVICE_TYPE)" >&2
     if ! c8y api POST devicecontrol/bulkNewDeviceRequests --file "$REG_FILE" --force; then
@@ -776,6 +809,29 @@ EOT
         exit 1
     fi
     rm -f "$REG_FILE"
+}
+
+download_cert() {
+    TARGET="$1"
+    shift
+    EXTERNAL_ID=""
+    DEVICE_CODE=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --device-id)
+                EXTERNAL_ID="$2"
+                shift
+                ;;
+            --device-code)
+                DEVICE_CODE="$2"
+                shift
+                ;;
+        esac
+        shift
+    done
+
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge cert download c8y --retry-every 5s --max-timeout 5m --device-id "$DEVICE_ID" --token "$DEVICE_CODE" 2>/dev/null
 }
 
 get_device_id() {
@@ -947,6 +1003,14 @@ do_action() {
                         create_ca
                         create_remote_cert
                         ;;
+                    c8y-ca)
+                        if [ -z "$DEVICE_CODE" ]; then
+                            # generate random code
+                            DEVICE_CODE=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32; echo)
+                        fi
+                        c8y_bulk_registration --device-id "$DEVICE_ID" --device-code "$DEVICE_CODE"
+                        download_cert "$TARGET" --device-id "$DEVICE_ID" --device-code "$DEVICE_CODE"
+                        ;;
                     *)
                         echo "Unknown bootstrapping method" >&2
                         exit 1
@@ -959,7 +1023,7 @@ do_action() {
             echo "Bootstrapping thin-edge.io in OFFLINE mode" >&2
 
             # Register device via c8y bulk registration api because "tedge connect c8y" doesn't do it
-            c8y_bulk_registration "$DEVICE_ID"
+            c8y_bulk_registration --device-id "$DEVICE_ID"
 
             if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO PATH="$REMOTE_PATH" tedge connect c8y --offline; then
                 echo "Offline mode requires thin-edge.io >= 1.1.0. Please upgrade and try again" >&2
