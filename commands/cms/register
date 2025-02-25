@@ -12,7 +12,7 @@ c8y_bulk_registration() {
     REG_FILE="/tmp/${EXTERNAL_ID}.csv"
 
     cat << EOT > "$REG_FILE"
-"ID","CREDENTIALS","AUTH_TYPE","TYPE","NAME","com_cumulocity_model_Agent.active"
+"ID","ENROLLMENT_OTP","AUTH_TYPE","TYPE","NAME","com_cumulocity_model_Agent.active"
 "$EXTERNAL_ID","$CREDENTIALS",CERTIFICATES,"$DEVICE_TYPE","$EXTERNAL_ID",true
 EOT
 
