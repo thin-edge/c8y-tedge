@@ -1,26 +1,35 @@
 #!/bin/sh
 set -e
 
+FEATURES="${FEATURES:-}"
+
 if [ "${DEBUG:-}" = 1 ]; then
     set -x
 fi
 
 usage() {
     cat <<EOT >&2
-Start a new tedge-container-demo instance
+Start a new tedge-demo-container instance
 
 It will download the latest docker-compose from the https://github.com/thin-edge/tedge-demo-container repository
 and bootstrap it using your current go-c8y-cli session.
 
-c8y tedge demo start [DEVICE_NAME]
+c8y tedge demo start [DEVICE_NAME] [--features <pki|nopki>]
+
+Arguments
+
+  --features <feature_set>      List of features to activate. e.g. nopki
 
 Examples
 
   c8y tedge demo start
-  # Start a tedge-container-demo using a randomly generated device name
+  # Start a tedge-demo-container using a randomly generated device name
 
   c8y tedge demo start mydevice001
-  # Start a tedge-container-demo using the device name 'mydevice001'
+  # Start a tedge-demo-container using the device name 'mydevice001'
+
+  c8y tedge demo start mydevice001 --features nopki
+  # Start a tedge-demo-container but disable the usage of the local PKI
 
 EOT
 }
@@ -30,17 +39,27 @@ fail() {
     exit 1
 }
 
+POSITIONAL_ARGS=
+
 while [ $# -gt 0 ]; do
     case "$1" in
+        --features)
+            FEATURES="$2"
+            shift
+            ;;
         --help|-h)
             usage
             exit 0
             ;;
         *)
-            break
+            POSITIONAL_ARGS=" $POSITIONAL_ARGS"
             ;;
     esac
+    shift
 done
+
+# shellcheck disable=SC2086
+set -- $POSITIONAL_ARGS
 
 if [ $# -gt 0 ]; then
     NAME="$1"
@@ -64,6 +83,11 @@ elif command -V curl >/dev/null 2>&1; then
     curl -LSs "$COMPOSE_URL" > "$COMPOSE_FILE"
 else
     fail "Missing required dependencies: Either curl or wget is needed"
+fi
+
+if [ -n "$FEATURES" ]; then
+    echo "Setting non-default features: FEATURES=$FEATURES" >&2
+    echo "FEATURES='$FEATURES'" > "$PROJECT_DIR/.env"
 fi
 
 echo "Running docker compose up -d" >&2
