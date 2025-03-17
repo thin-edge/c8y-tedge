@@ -108,7 +108,7 @@ main() {
         echo
         echo "Or run command"
         echo
-        echo "  c8y tedge cms register '$EXTERNAL_ID' '$DEVICE_CODE'"
+        echo "  c8y deviceregistration register-ca --id '$EXTERNAL_ID' --one-time-password '$DEVICE_CODE'"
         echo
     fi
 
