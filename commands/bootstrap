@@ -15,6 +15,7 @@ SUDO=${SUDO:-}
 OFFLINE_MODE=${OFFLINE_MODE:-0}
 REMOVE_KNOWN_HOST_ENTRY_ON_FAILURE=${REMOVE_KNOWN_HOST_ENTRY_ON_FAILURE:-1}
 DEVICE_CODE=${DEVICE_CODE:-}
+DEVICE_TYPE="${DEVICE_TYPE:-thin-edge.io}"
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -766,50 +767,6 @@ configure_mtls_mqtt_client() {
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge config set mqtt.client.auth.key_file "$LOCAL_CERT_KEY"
 }
 
-c8y_bulk_registration() {
-    EXTERNAL_ID=""
-    DEVICE_TYPE="${DEVICE_TYPE:-thin-edge.io}"
-    DEVICE_CODE=""
-
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --device-id)
-                EXTERNAL_ID="$2"
-                shift
-                ;;
-            --device-type)
-                DEVICE_TYPE="$2"
-                shift
-                ;;
-            --device-code)
-                DEVICE_CODE="$2"
-                shift
-                ;;
-        esac
-        shift
-    done
-
-    REG_FILE="/tmp/${EXTERNAL_ID}.csv"
-
-    if [ -n "$DEVICE_CODE" ]; then
-        cat << EOT > "$REG_FILE"
-"ID","CREDENTIALS","AUTH_TYPE","TYPE","NAME","com_cumulocity_model_Agent.active"
-"$EXTERNAL_ID","$DEVICE_CODE",CERTIFICATES,"$DEVICE_TYPE","$EXTERNAL_ID",true
-EOT
-    else
-        cat << EOT > "$REG_FILE"
-"ID","AUTH_TYPE","TYPE","NAME","com_cumulocity_model_Agent.active"
-"$EXTERNAL_ID",CERTIFICATES,"$DEVICE_TYPE","$EXTERNAL_ID",true
-EOT
-    fi
-
-    echo "Manually registering device: $EXTERNAL_ID (type=$DEVICE_TYPE)" >&2
-    if ! c8y api POST devicecontrol/bulkNewDeviceRequests --file "$REG_FILE" --force; then
-        echo "Warning: Failed to manually register device (via c8y bulk registration API): $EXTERNAL_ID" >&2
-        exit 1
-    fi
-    rm -f "$REG_FILE"
-}
 
 download_cert() {
     TARGET="$1"
@@ -1008,7 +965,12 @@ do_action() {
                             # generate random code
                             DEVICE_CODE=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32; echo)
                         fi
-                        c8y_bulk_registration --device-id "$DEVICE_ID" --device-code "$DEVICE_CODE"
+
+                        if ! c8y deviceregistration register-ca --id "$DEVICE_ID" --type "$DEVICE_TYPE" --one-time-password "$DEVICE_CODE" --force; then
+                            echo "Failed to register device" >&2
+                            exit 1
+                        fi
+
                         download_cert "$TARGET" --device-id "$DEVICE_ID" --device-code "$DEVICE_CODE"
                         ;;
                     *)
@@ -1023,7 +985,10 @@ do_action() {
             echo "Bootstrapping thin-edge.io in OFFLINE mode" >&2
 
             # Register device via c8y bulk registration api because "tedge connect c8y" doesn't do it
-            c8y_bulk_registration --device-id "$DEVICE_ID"
+            if ! c8y deviceregistration register-external-ca --id "$DEVICE_ID" --type "$DEVICE_TYPE" --force; then
+                echo "Failed to register device" >&2
+                exit 1
+            fi
 
             if ! "${EXEC_CMD[@]}" "$TARGET" $SUDO PATH="$REMOTE_PATH" tedge connect c8y --offline; then
                 echo "Offline mode requires thin-edge.io >= 1.1.0. Please upgrade and try again" >&2
