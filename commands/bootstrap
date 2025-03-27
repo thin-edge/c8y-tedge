@@ -939,7 +939,7 @@ do_action() {
                     c8y-ca)
                         if [ -z "$DEVICE_CODE" ]; then
                             # generate random code
-                            DEVICE_CODE=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32; echo)
+                            DEVICE_CODE=$(c8y template execute --template "_.Password(32)")
                         fi
 
                         if ! c8y deviceregistration register-ca --id "$DEVICE_ID" --type "$DEVICE_TYPE" --one-time-password "$DEVICE_CODE" --force; then
