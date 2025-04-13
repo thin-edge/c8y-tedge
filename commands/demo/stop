@@ -1,6 +1,8 @@
 #!/bin/sh
 set -e
 
+KEEP_DEVICE="${KEEP_DEVICE:-0}"
+
 if [ "${DEBUG:-}" = 1 ]; then
     set -x
 fi
@@ -9,11 +11,17 @@ usage() {
     cat <<EOT >&2
 Stop an existing tedge-container-demo instance
 
-c8y tedge demo stop <DEVICE_NAME>
+c8y tedge demo stop <DEVICE_NAME> [--keep]
+
+Arguments
+  --keep        Don't delete the device and device user in Cumulocity
 
 Examples
 
   c8y tedge demo stop mydevice001
+  # Stop an demo instance with the device name 'mydevice001'
+
+  c8y tedge demo stop mydevice001 --keep
   # Stop an demo instance with the device name 'mydevice001'
 
 EOT
@@ -24,17 +32,26 @@ fail() {
     exit 1
 }
 
+POSITIONAL_ARGS=""
+
 while [ $# -gt 0 ]; do
     case "$1" in
+        --keep)
+            KEEP_DEVICE=1
+            ;;
         --help|-h)
             usage
             exit 0
             ;;
         *)
-            break
+            POSITIONAL_ARGS="$POSITIONAL_ARGS $1"
             ;;
     esac
+    shift
 done
+
+# shellcheck disable=SC2086
+set -- $POSITIONAL_ARGS
 
 if [ $# -lt 1 ]; then
     fail "Missing device name (aka project name)"
@@ -52,3 +69,10 @@ fi
 
 (cd "$PROJECT_DIR" && docker compose down -v)
 rm -rf "$PROJECT_DIR"
+
+# Delete the device from Cumulocity
+if [ "$KEEP_DEVICE" != 1 ]; then
+    echo "Removing device and related device user. externalId=$NAME" >&2
+    c8y identity get -n --name "$NAME" | c8y devices delete --cascade --force >/dev/null ||:
+    c8y users delete --id "device_$NAME" --force >/dev/null ||:
+fi
