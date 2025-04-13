@@ -131,6 +131,17 @@ if [ -n "$MO_ID" ]; then
                 --username iotadmin \
                 --password iotadmin \
                 --force >/dev/null
+        
+        # Add passthrough connection for monit for quick demoing of the c8y http proxy
+        # See the project for more details: https://github.com/Cumulocity-IoT/cumulocity-remote-access-cloud-http-proxy
+        c8y remoteaccess configurations get -n --id "http:monit" --device "$MO_ID" --silentStatusCodes 404 ||
+            c8y remoteaccess configurations create-passthrough \
+                -n \
+                --device "$MO_ID" \
+                --name "http:monit" \
+                --hostname "127.0.0.1" \
+                --port "2812" \
+                --force >/dev/null
     else
         echo "Warning: We couldn't add the remote access configuration as you don't have the required permissions"
         echo "To fix this: Add the 'Remote Access' permission to a role like 'Admin' and assign yourself to it"
