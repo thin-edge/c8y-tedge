@@ -112,7 +112,7 @@ main() {
         echo
     fi
 
-    if ! tedge cert download c8y --retry-every 5s --max-timeout 5m --device-id "$EXTERNAL_ID" --token "$DEVICE_ONE_TIME_PASSWORD" 2>/dev/null; then
+    if ! tedge cert download c8y --retry-every 5s --max-timeout 5m --device-id "$EXTERNAL_ID" --one-time-password "$DEVICE_ONE_TIME_PASSWORD" 2>/dev/null; then
         echo "Failed to get device certificate." >&2
         exit 1
     fi
@@ -155,7 +155,7 @@ EXTERNAL_ID="$1"
 
 if [ -z "$DEVICE_ONE_TIME_PASSWORD" ]; then
     # Change back to password length of 32 once the server fix has been deployed
-    DEVICE_ONE_TIME_PASSWORD=$(c8y template execute --template "_.Password(31)")
+    DEVICE_ONE_TIME_PASSWORD=$(c8y template execute --template "_.PasswordUrlSafe(31)")
     DISPLAY_DEVICE_ONE_TIME_PASSWORD=1
 fi
 
