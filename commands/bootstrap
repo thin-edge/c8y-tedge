@@ -13,6 +13,7 @@ PATTERN="${PATTERN:-.+}"
 BOOTSTRAP_TYPE="${BOOTSTRAP_TYPE:-}"
 SUDO=${SUDO:-}
 OFFLINE_MODE=${OFFLINE_MODE:-0}
+ONE_TIME_PASSWORD=${ONE_TIME_PASSWORD:-}
 REMOVE_KNOWN_HOST_ENTRY_ON_FAILURE=${REMOVE_KNOWN_HOST_ENTRY_ON_FAILURE:-1}
 
 usage() {
@@ -22,7 +23,7 @@ Bootstrap a thin-edge.io device using ssh. thin-edge.io will be installed on the
 if it is not already present.
 The device must be reachable via ssh on the local network.
 
-The supported bootstraping methods are described below:
+The supported bootstrapping methods are described below:
 
 Type: local-ca
 1. Create local-ca (if one does not already exist)
@@ -62,6 +63,8 @@ FLAGS
   --skip-website                           Don't open the Cumulocity IoT Device Management application
   --page <STRING>                          Which Device Management page to open. Defaults to device-info
   --type <local-ca|self-signed|c8y-ca|auto>     Certificate signing method. Accepts local-ca, self-signed, auto (default)
+  --one-time-password, -p                  One-time password for the Cumulocity certificate-authority bootstrap type.
+                                           A random password will be used if one is not provided.
   --mtls                                   Enable mTLS for all local connections over MQTT and HTTP
   --main-device <MAIN_DEVICE>              Main device hostname or ip address to connect to via ssh. This is only used when enabling mTLS on a child device.
   --scan                                   Bootstrap devices found by a scan
@@ -85,6 +88,9 @@ c8y tedge bootstrap root@mydevice.local
 
 # Bootstrap a device via ssh and forcing the usage of the Cumulocity Certificate Authority (it must already be enabled)
 c8y tedge bootstrap root@mydevice.local --type c8y-ca
+
+# Bootstrap a device via ssh, using Cumulocity Certificate Authority and with a user defined one-time password
+c8y tedge bootstrap root@mydevice.local --type c8y-ca --one-time-password "ex7s23j4c7687234lk;jO"
 
 # Bootstrap a device via ssh in offline mode (if your device does not have internet access)
 c8y tedge bootstrap root@mydevice.local --offline
@@ -141,6 +147,11 @@ while [ $# -gt 0 ]; do
             ;;
         --type)
             BOOTSTRAP_TYPE="$2"
+            shift
+            ;;
+        --one-time-password|-p)
+            # Only used for Cumulocity CA
+            ONE_TIME_PASSWORD="$2"
             shift
             ;;
         --mtls)
@@ -447,7 +458,9 @@ register_with_c8y_ca() {
     # Delete in case if the registration already exists
     c8y deviceregistration delete --id "$DEVICE_ID" --force >/dev/null 2>&1 ||:
 
-    ONE_TIME_PASSWORD=$(c8y template execute --template "_.PasswordUrlSafe(31)")
+    if [ -z "$ONE_TIME_PASSWORD" ]; then
+        ONE_TIME_PASSWORD=$(c8y template execute --template "_.PasswordUrlSafe(31)")
+    fi
     c8y deviceregistration register-ca --id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD"
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge cert download c8y --device-id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD" --retry-every 5s --max-timeout 30s  2>/dev/null ||:
 }
