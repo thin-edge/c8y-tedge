@@ -58,18 +58,18 @@ ARGUMENTS
                       has not already been bootstrapped.
 
 FLAGS
-  --skip-renew-cert                 Don't update the certificate of an already connected device
-  --skip-website                    Don't open the Cumulocity IoT Device Management application
-  --page <STRING>                   Which Device Management page to open. Defaults to device-info
-  --type <local-ca|self-signed>     Certificate signing method. Accepts local-ca (default), self-signed
-  --mtls                            Enable mTLS for all local connections over MQTT and HTTP
-  --main-device <MAIN_DEVICE>       Main device hostname or ip address to connect to via ssh. This is only used when enabling mTLS on a child device.
-  --scan                            Bootstrap devices found by a scan
-  --pattern <REGEX>                 Only include devices which match the given pattern (only applies when piping or scanning devices)
-  --offline                         Use offline mode where the cloud connection will not be checked. Ideal if your device does not have internet access
-  --verbose                         Enable verbose logging
-  --debug                           Enable debug logging
-  -h, --help                        Show this help
+  --skip-renew-cert                        Don't update the certificate of an already connected device
+  --skip-website                           Don't open the Cumulocity IoT Device Management application
+  --page <STRING>                          Which Device Management page to open. Defaults to device-info
+  --type <local-ca|self-signed|c8y-ca|auto>     Certificate signing method. Accepts local-ca, self-signed, auto (default)
+  --mtls                                   Enable mTLS for all local connections over MQTT and HTTP
+  --main-device <MAIN_DEVICE>              Main device hostname or ip address to connect to via ssh. This is only used when enabling mTLS on a child device.
+  --scan                                   Bootstrap devices found by a scan
+  --pattern <REGEX>                        Only include devices which match the given pattern (only applies when piping or scanning devices)
+  --offline                                Use offline mode where the cloud connection will not be checked. Ideal if your device does not have internet access
+  --verbose                                Enable verbose logging
+  --debug                                  Enable debug logging
+  -h, --help                               Show this help
 
 $EXAMPLES
 
@@ -82,6 +82,9 @@ EXAMPLES
 
 # Bootstrap a device via ssh
 c8y tedge bootstrap root@mydevice.local
+
+# Bootstrap a device via ssh and forcing the usage of the Cumulocity Certificate Authority (it must already be enabled)
+c8y tedge bootstrap root@mydevice.local --type c8y-ca
 
 # Bootstrap a device via ssh in offline mode (if your device does not have internet access)
 c8y tedge bootstrap root@mydevice.local --offline
@@ -195,14 +198,35 @@ if [ $# -ge 2 ]; then
     DEVICE_ID="$2"
 fi
 
-# Set default bootstrap type (based on what dependencies are available)
-if [ -z "$BOOTSTRAP_TYPE" ]; then
-    if command -V openssl >/dev/null 2>&1; then
-        BOOTSTRAP_TYPE=local-ca
-    else
-        BOOTSTRAP_TYPE=self-signed
+supports_c8y_ca() {
+    target="$1"
+    ENABLED=$(c8y features get --key certificate-authority --select active -o csv ||:)
+    if [ "$ENABLED" != true ]; then
+        return 1
     fi
-fi
+
+    if ! "${EXEC_CMD[@]}" "$target" tedge cert download c8y --help >/dev/null 2>&1; then
+        return 1
+    fi
+    return 0
+}
+
+detect_bootstrap_type() {
+    TARGET="$1"
+    # Set default bootstrap type (based on what dependencies are available)
+    if [ -z "$BOOTSTRAP_TYPE" ] || [ "$BOOTSTRAP_TYPE" = auto ]; then
+        if supports_c8y_ca "$TARGET"; then
+            BOOTSTRAP_TYPE=c8y-ca
+        elif command -V openssl >/dev/null 2>&1; then
+            BOOTSTRAP_TYPE=local-ca
+        else
+            BOOTSTRAP_TYPE=self-signed
+        fi
+
+        echo "Using bootstrap type: $BOOTSTRAP_TYPE" >&2
+    fi
+}
+
 
 info() {
     if [ "$C8Y_SETTINGS_DEFAULTS_VERBOSE" = "true" ]; then
@@ -406,6 +430,20 @@ create_self_signed() {
         echo "failed to upload device certificate" >&2
         exit 1
     fi
+}
+
+register_with_c8y_ca() {
+    # Register the device using the Cumulocity certificate-authority feature
+    if [ -z "$DEVICE_ID" ]; then
+        DEVICE_ID=$("${EXEC_CMD[@]}" "$TARGET" $SUDO tedge cert create --device-id '$HOSTNAME' 2>/dev/null ||:)
+    fi
+
+    # Delete in case if the registration already exists
+    c8y deviceregistration delete --id "$DEVICE_ID" --force >/dev/null 2>&1 ||:
+
+    ONE_TIME_PASSWORD=$(c8y template execute --template "_.PasswordUrlSafe(31)")
+    c8y deviceregistration register-ca --id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD"
+    "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge cert download c8y --device-id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD" --retry-every 5s --max-timeout 30s  2>/dev/null ||:
 }
 
 # Create a signing certificate for a main device
@@ -897,6 +935,7 @@ do_action() {
 
     # Install thin-edge.io
     install_tedge_if_missing
+    detect_bootstrap_type "$TARGET"
 
     # Get identity
     DEVICE_ID=$(get_device_id "$TARGET" "$DEVICE_ID")
@@ -946,6 +985,12 @@ do_action() {
                         fi
                         create_ca
                         create_remote_cert
+                        ;;
+                    c8y-ca)
+                        if ! register_with_c8y_ca; then
+                            echo "Failed to register device with the Cumulocity Certificate Authority" >&2
+                            exit 1
+                        fi
                         ;;
                     *)
                         echo "Unknown bootstrapping method" >&2
