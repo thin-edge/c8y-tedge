@@ -205,6 +205,12 @@ supports_c8y_ca() {
         return 1
     fi
 
+    # Apply minimum Cumulocity platform version check
+    if [ -z "$(c8y currenttenant version --filter "value version >2025.129.0")" ]; then
+        echo "INFO: Cumulocity version must be >2025.129.0 to use the certificate-authority feature" >&2
+        return 1
+    fi
+
     if ! "${EXEC_CMD[@]}" "$target" tedge cert download c8y --help >/dev/null 2>&1; then
         return 1
     fi
