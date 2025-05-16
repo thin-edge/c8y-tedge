@@ -7,6 +7,7 @@ WEBSITE_PAGE="device-info"
 SCAN=${SCAN:-0}
 PATTERN="${PATTERN:-.+}"
 C8Y_TEDGE_CONTAINER_CLI="${C8Y_TEDGE_CONTAINER_CLI:-}"
+ONE_TIME_PASSWORD="${ONE_TIME_PASSWORD:-}"
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -209,6 +210,77 @@ wait_for_container() {
     echo "$BOOTSTRAP"
 }
 
+supports_c8y_ca() {
+    target="$1"
+    ENABLED=$(c8y features get --key certificate-authority --select active -o csv 2>/dev/null ||:)
+    if [ "$ENABLED" != true ]; then
+        return 1
+    fi
+
+    # Apply minimum Cumulocity platform version check
+    if [ -z "$(c8y currenttenant version --filter "value version >2025.129.0")" ]; then
+        echo "INFO: Cumulocity version must be >2025.129.0 to use the certificate-authority feature" >&2
+        return 1
+    fi
+
+    if ! "${EXEC_CMD[@]}" "$target" tedge cert download c8y --help >/dev/null 2>&1; then
+        return 1
+    fi
+    return 0
+}
+
+register_with_c8y_ca() {
+    # Register the device using the Cumulocity certificate-authority feature
+    # Delete in case if the registration already exists
+    c8y deviceregistration delete --id "$DEVICE_ID" --force >/dev/null 2>&1 ||:
+
+    if [ -z "$ONE_TIME_PASSWORD" ]; then
+        ONE_TIME_PASSWORD=$(c8y template execute --template "_.PasswordUrlSafe(31)")
+    fi
+    if ! c8y deviceregistration register-ca --id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD" >/dev/null; then
+        echo "Failed to register device using the Cumulocity Certificate Authority Feature" >&2
+        return 1
+    fi
+    "${EXEC_CMD[@]}" "$TARGET" tedge cert download c8y --device-id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD" --retry-every 5s --max-timeout 30s  2>/dev/null ||:
+}
+
+bootstrap_self_signed() {
+    # Create the device certificate, ignore any errors as this could have already happened
+    # Generally the device cert should not be deleted, so just fail silently for now
+    if [ -n "$DEVICE_ID" ]; then
+        # Use the user given device-id
+        "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id "$DEVICE_ID" 2>/dev/null ||:
+    else
+        # Default to the hostname of the device
+        # shellcheck disable=SC2016
+        "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id '${DEVICE_ID:-tedge_$(hostname)}' 2>/dev/null ||:
+    fi
+
+    # Get public cert
+    PUBLIC_CERT=$("${EXEC_CMD[@]}" "$TARGET" /bin/sh -c "cat \$(tedge config get device.cert_path)")
+
+    if [ -z "$PUBLIC_CERT" ]; then
+        echo "Failed to get device certifate from $TARGET" >&2
+        exit 1
+    fi
+
+    if [ -z "$DEVICE_ID" ]; then
+        DEVICE_ID=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.id)
+    fi
+
+    echo "Certificate CN: $DEVICE_ID" >&2
+    if ! c8y devicemanagement certificates create \
+        -n \
+        --name "$DEVICE_ID" \
+        --autoRegistrationEnabled \
+        --status ENABLED \
+        --file <(echo "$PUBLIC_CERT") \
+        --silentExit --silentStatusCodes 409 \
+        --force; then
+        echo "failed to upload device certificate" >&2
+        exit 1
+    fi
+}
 
 do_action() {
     if [ $# -gt 0 ]; then
@@ -281,40 +353,13 @@ do_action() {
 
     "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.url "$URL"
 
-    # Create the device certificate, ignore any errors as this could have already happened
-    # Generally the device cert should not be deleted, so just fail silently for now
-    if [ -n "$DEVICE_ID" ]; then
-        # Use the user given device-id
-        "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id "$DEVICE_ID" 2>/dev/null ||:
+    # Try cumulocity certificate-authority feature first then fallback to local ca certificate
+    if supports_c8y_ca "$TARGET"; then
+        echo "Bootstrapping using a Cumulocity Certificate Authority feature" >&2
+        register_with_c8y_ca
     else
-        # Default to the hostname of the device
-        # shellcheck disable=SC2016
-        "${EXEC_CMD[@]}" "$TARGET" tedge cert create --device-id '${DEVICE_ID:-tedge_$(hostname)}' 2>/dev/null ||:
-    fi
-
-    # Get public cert
-    PUBLIC_CERT=$("${EXEC_CMD[@]}" "$TARGET" /bin/sh -c "cat \$(tedge config get device.cert_path)")
-
-    if [ -z "$PUBLIC_CERT" ]; then
-        echo "Failed to get device certifate from $TARGET" >&2
-        exit 1
-    fi
-
-    if [ -z "$DEVICE_ID" ]; then
-        DEVICE_ID=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.id)
-    fi
-
-    echo "Certificate CN: $DEVICE_ID" >&2
-    if ! c8y devicemanagement certificates create \
-        -n \
-        --name "$DEVICE_ID" \
-        --autoRegistrationEnabled \
-        --status ENABLED \
-        --file <(echo "$PUBLIC_CERT") \
-        --silentExit --silentStatusCodes 409 \
-        --force; then
-        echo "failed to upload device certificate" >&2
-        exit 1
+        echo "Bootstrapping using a self-signed certificate" >&2
+        bootstrap_self_signed
     fi
 
     # Wait for certificate to be enabled
