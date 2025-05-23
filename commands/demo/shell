@@ -50,4 +50,4 @@ if [ ! -f "$COMPOSE_FILE" ]; then
     exit 0
 fi
 
-(cd "$PROJECT_DIR" && docker compose exec tedge bash)
+(cd "$PROJECT_DIR" && docker compose exec tedge zsh)
