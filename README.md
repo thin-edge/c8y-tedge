@@ -38,6 +38,14 @@ Or you can specify the device name to be used:
 c8y tedge demo start tedge0001
 ```
 
+Or you can specify the auth-type you want to use (e.g. certificate (default) or basic):
+
+```sh
+c8y tedge demo start tedge0001 --auth-type basic
+
+c8y tedge demo start tedge0001 --auth-type certificate
+```
+
 ### Bootstrap device via ssh
 
 Bootstrap a thin-edge.io enable device using SSH.
