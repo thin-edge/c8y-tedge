@@ -19,7 +19,13 @@ Use ✅ or 🔲 indicates if the extension includes the given functionality or n
 The extension can be installed using the following command.
 
 ```sh
-c8y extension install thin-edge/c8y-tedge
+c8y extensions install thin-edge/c8y-tedge
+```
+
+Or if you have it already installed, then update to the latest version using:
+
+```sh
+c8y extensions update tedge
 ```
 
 ## Examples
