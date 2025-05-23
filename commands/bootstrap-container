@@ -393,13 +393,13 @@ do_action() {
     case "$AUTH_TYPE" in
         basic)
             # Use basic auth
-            echo "Bootstrapping using a basic auth" >&2
+            echo "Bootstrapping using basic auth" >&2
             register_with_c8y_basic_auth
             ;;
         certificate)
             # Try cumulocity certificate-authority feature first then fallback to local ca certificate
             if supports_c8y_ca "$TARGET"; then
-                echo "Bootstrapping using a Cumulocity Certificate Authority feature" >&2
+                echo "Bootstrapping using the Cumulocity Certificate Authority feature" >&2
                 register_with_c8y_ca
             else
                 echo "Bootstrapping using a self-signed certificate" >&2
