@@ -8,6 +8,7 @@ SCAN=${SCAN:-0}
 PATTERN="${PATTERN:-.+}"
 C8Y_TEDGE_CONTAINER_CLI="${C8Y_TEDGE_CONTAINER_CLI:-}"
 ONE_TIME_PASSWORD="${ONE_TIME_PASSWORD:-}"
+AUTH_TYPE="${AUTH_TYPE:-}"
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -33,6 +34,7 @@ FLAGS
   --container-cli <STRING>    Container cli, e.g. docker, nerdctl, podman. Can also be set via the environment variable, C8Y_TEDGE_CONTAINER_CLI
   --skip-website              Don't open the Cumulocity IoT Device Management application
   --page <STRING>             Which Device Management page to open. Defaults to device-info
+  --auth-type <STRING>        Authorization type, e.g. certificate or basic
   --verbose                   Enable verbose logging
   --debug                     Enable debug logging
   -h, --help                  Show this help
@@ -95,6 +97,10 @@ while [ $# -gt 0 ]; do
             ;;
         --device-id)
             DEVICE_ID="$2"
+            shift
+            ;;
+        --auth-type)
+            AUTH_TYPE="$2"
             shift
             ;;
         --container-cli)
@@ -237,11 +243,42 @@ register_with_c8y_ca() {
     if [ -z "$ONE_TIME_PASSWORD" ]; then
         ONE_TIME_PASSWORD=$(c8y template execute --template "_.PasswordUrlSafe(31)")
     fi
-    if ! c8y deviceregistration register-ca --id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD" >/dev/null; then
+    if ! c8y deviceregistration register-ca --id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD" >/dev/null --force; then
         echo "Failed to register device using the Cumulocity Certificate Authority Feature" >&2
         return 1
     fi
     "${EXEC_CMD[@]}" "$TARGET" tedge cert download c8y --device-id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD" --retry-every 5s --max-timeout 30s  2>/dev/null ||:
+}
+
+register_with_c8y_basic_auth() {
+    # Register the device using the Cumulocity certificate-authority feature
+    # Delete in case if the registration already exists
+    c8y deviceregistration delete --id "$DEVICE_ID" --force >/dev/null 2>&1 ||:
+
+    C8Y_DEVICE_USER="device_${DEVICE_ID}"
+    if ! c8y users delete --id "$C8Y_DEVICE_USER" --silentExit --silentStatusCodes 404 >/dev/null 2>&1; then
+        echo "Warning: Failed to delete the existing device user: $C8Y_DEVICE_USER" >&2
+    fi
+
+    if [ -z "$C8Y_TENANT" ]; then
+        C8Y_TENANT=$(c8y session get --select tenant -o csv 2>/dev/null)
+    fi
+
+    if [ -z "$C8Y_DEVICE_PASSWORD" ]; then
+        C8Y_DEVICE_PASSWORD=$(c8y template execute --template "_.PasswordUrlSafe(31)")
+    fi
+    if ! c8y deviceregistration register-basic --id "$DEVICE_ID" --password "$C8Y_DEVICE_PASSWORD" --force >/dev/null; then
+        echo "Failed to register device using the Cumulocity Basic Auth" >&2
+        return 1
+    fi
+
+    # configure tedge for using basic auth
+    "${EXEC_CMD[@]}" "$TARGET" tedge config set device.id "$DEVICE_ID"
+    "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.auth_method auto
+
+    # Set the credentials
+    TEDGE_C8Y_CREDS=$(printf '[c8y]\nusername = "%s"\npassword = "%s"' "$C8Y_TENANT/$C8Y_DEVICE_USER" "$C8Y_DEVICE_PASSWORD")
+    "${EXEC_CMD[@]}" "$TARGET" sh -c "printf '%s' '$TEDGE_C8Y_CREDS' '$REMOTE_CMD_CREATE_CREDS' | sudo tee /etc/tedge/credentials.toml >/dev/null"
 }
 
 bootstrap_self_signed() {
@@ -353,14 +390,25 @@ do_action() {
 
     "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.url "$URL"
 
-    # Try cumulocity certificate-authority feature first then fallback to local ca certificate
-    if supports_c8y_ca "$TARGET"; then
-        echo "Bootstrapping using a Cumulocity Certificate Authority feature" >&2
-        register_with_c8y_ca
-    else
-        echo "Bootstrapping using a self-signed certificate" >&2
-        bootstrap_self_signed
-    fi
+    case "$AUTH_TYPE" in
+        basic)
+            # Use basic auth
+            echo "Bootstrapping using a basic auth" >&2
+            register_with_c8y_basic_auth
+            ;;
+        certificate)
+            # Try cumulocity certificate-authority feature first then fallback to local ca certificate
+            if supports_c8y_ca "$TARGET"; then
+                echo "Bootstrapping using a Cumulocity Certificate Authority feature" >&2
+                register_with_c8y_ca
+            else
+                echo "Bootstrapping using a self-signed certificate" >&2
+                bootstrap_self_signed
+            fi
+            ;;
+    esac
+
+    
 
     # Wait for certificate to be enabled
     if ! "${EXEC_CMD[@]}" "$TARGET" tedge connect c8y --test >/dev/null 2>&1; then
@@ -412,6 +460,16 @@ fi
 if [ "${#DEVICES[@]}" -gt 0 ]; then
     echo "Found ${#DEVICES[@]} devices" >&2
 fi
+
+# Check if auth-type is valid but default to something sensible
+case "$AUTH_TYPE" in
+    certificate|basic)
+        ;;
+    *)
+        AUTH_TYPE="certificate"
+        echo "Unknown auth-type option ($AUTH_TYPE). Defaulting to 'certificate'. Allowed values: [certificate, basic]" >&2
+        ;;
+esac
 
 for device in "${DEVICES[@]}"; do
     do_action "$device"
