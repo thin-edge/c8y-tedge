@@ -235,15 +235,29 @@ supports_c8y_ca() {
     return 0
 }
 
+delete_existing_device_user() {
+    # Remove any existing user in case if the device user has been registered
+    # with a different auth type then what is being used now. Otherwise the device
+    # won't be able to connect. This behaviour might change in the future
+    device_id="$1"
+    device_user="device_${device_id}"
+    if ! c8y users delete --id "$device_user" --silentExit --silentStatusCodes 404 --force >/dev/null 2>&1; then
+        echo "Warning: Failed to delete the existing device user: $device_user" >&2
+    fi
+}
+
 register_with_c8y_ca() {
     # Register the device using the Cumulocity certificate-authority feature
     # Delete in case if the registration already exists
     c8y deviceregistration delete --id "$DEVICE_ID" --force >/dev/null 2>&1 ||:
 
+    C8Y_DEVICE_USER="device_${DEVICE_ID}"
+    delete_existing_device_user "$DEVICE_ID"
+
     if [ -z "$ONE_TIME_PASSWORD" ]; then
         ONE_TIME_PASSWORD=$(c8y template execute --template "_.PasswordUrlSafe(31)")
     fi
-    if ! c8y deviceregistration register-ca --id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD" >/dev/null --force; then
+    if ! c8y deviceregistration register-ca --id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD" --force >/dev/null; then
         echo "Failed to register device using the Cumulocity Certificate Authority Feature" >&2
         return 1
     fi
@@ -255,11 +269,8 @@ register_with_c8y_basic_auth() {
     # Delete in case if the registration already exists
     c8y deviceregistration delete --id "$DEVICE_ID" --force >/dev/null 2>&1 ||:
 
-    C8Y_DEVICE_USER="device_${DEVICE_ID}"
-    if ! c8y users delete --id "$C8Y_DEVICE_USER" --silentExit --silentStatusCodes 404 >/dev/null 2>&1; then
-        echo "Warning: Failed to delete the existing device user: $C8Y_DEVICE_USER" >&2
-    fi
-
+    delete_existing_device_user "$DEVICE_ID"
+    
     if [ -z "$C8Y_TENANT" ]; then
         C8Y_TENANT=$(c8y session get --select tenant -o csv 2>/dev/null)
     fi
@@ -277,6 +288,7 @@ register_with_c8y_basic_auth() {
     "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.auth_method auto
 
     # Set the credentials
+    C8Y_DEVICE_USER="device_${DEVICE_ID}"
     TEDGE_C8Y_CREDS=$(printf '[c8y]\nusername = "%s"\npassword = "%s"' "$C8Y_TENANT/$C8Y_DEVICE_USER" "$C8Y_DEVICE_PASSWORD")
     "${EXEC_CMD[@]}" "$TARGET" sh -c "printf '%s' '$TEDGE_C8Y_CREDS' '$REMOTE_CMD_CREATE_CREDS' | sudo tee /etc/tedge/credentials.toml >/dev/null"
 }
@@ -304,6 +316,8 @@ bootstrap_self_signed() {
     if [ -z "$DEVICE_ID" ]; then
         DEVICE_ID=$("${EXEC_CMD[@]}" "$TARGET" tedge config get device.id)
     fi
+
+    delete_existing_device_user "$DEVICE_ID"
 
     echo "Certificate CN: $DEVICE_ID" >&2
     if ! c8y devicemanagement certificates create \
