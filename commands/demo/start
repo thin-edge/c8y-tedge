@@ -4,6 +4,7 @@ set -e
 FEATURES="${FEATURES:-}"
 BOOTSTRAP="${BOOTSTRAP:-1}"
 OPEN_WEBSITE="${OPEN_WEBSITE:-1}"
+AUTH_TYPE="${AUTH_TYPE:-certificate}"
 
 if [ "${DEBUG:-}" = 1 ]; then
     set -x
@@ -16,13 +17,15 @@ Start a new tedge-demo-container instance
 It will download the latest docker-compose from the https://github.com/thin-edge/tedge-demo-container repository
 and bootstrap it using your current go-c8y-cli session.
 
-c8y tedge demo start [DEVICE_NAME] [--features <pki|nopki>]
+c8y tedge demo start [DEVICE_NAME] [--features <pki|nopki>] [--auth-type <certificate|basic>]
 
 Arguments
 
-  --features <feature_set>      List of features to activate. e.g. nopki
-  --skip-bootstrap              Don't bootstrap the demo setup
-  --skip-website                Don't open Cumulocity webpage
+  --features <feature_set>         List of features to activate. e.g. nopki
+  --auth-type <certificate|basic>  Authorization type to use when connection to Cumulocity. Allowed values:  certificate, basic
+                                   Defaults to 'certificate'
+  --skip-bootstrap                 Don't bootstrap the demo setup
+  --skip-website                   Don't open Cumulocity webpage
 
 Examples
 
@@ -30,6 +33,9 @@ Examples
   # Start a tedge-demo-container using a randomly generated device name
 
   c8y tedge demo start mydevice001
+  # Start a tedge-demo-container using the device name 'mydevice001'
+
+  c8y tedge demo start mydevice001 --auth-type basic
   # Start a tedge-demo-container using the device name 'mydevice001'
 
   c8y tedge demo start mydevice001 --features nopki
@@ -49,6 +55,10 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --features)
             FEATURES="$2"
+            shift
+            ;;
+        --auth-type)
+            AUTH_TYPE="$2"
             shift
             ;;
         --help|-h)
@@ -119,7 +129,7 @@ EOT
 fi
 
 echo "Bootstrapping" >&2
-c8y tedge bootstrap-container tedge --device-id "$NAME" --skip-website "$@"
+c8y tedge bootstrap-container tedge --device-id "$NAME" --skip-website --auth-type "$AUTH_TYPE" "$@"
 
 # Create a default remoteaccess configuration but only if the user has the correct permissions
 MO_ID=$(c8y identity get -n --name "$NAME" --select managedObject.id -o csv)
