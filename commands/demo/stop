@@ -73,6 +73,6 @@ rm -rf "$PROJECT_DIR"
 # Delete the device from Cumulocity
 if [ "$KEEP_DEVICE" != 1 ]; then
     echo "Removing device and related device user. externalId=$NAME" >&2
-    c8y identity get -n --name "$NAME" | c8y devices delete --cascade --force >/dev/null ||:
-    c8y users delete --id "device_$NAME" --force >/dev/null ||:
+    c8y identity get -n --name "$NAME" --silentExit --silentStatusCodes 404,403,401 | c8y devices delete --cascade --force >/dev/null ||:
+    c8y users delete --id "device_$NAME" --silentExit --silentStatusCodes 404,403,401 --force >/dev/null ||:
 fi
