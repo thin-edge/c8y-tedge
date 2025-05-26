@@ -52,6 +52,21 @@ c8y tedge demo start tedge0001 --auth-type basic
 c8y tedge demo start tedge0001 --auth-type certificate
 ```
 
+### Start a tedge-container-bundle container
+
+Start a [tedge-container-bundle](https://github.com/thin-edge/tedge-container-bundle) container that can be used to managed other containers. See the project for more details.
+
+```sh
+# Start with an auto generated name
+c8y tedge container-bundle start
+
+# Start and use a given name
+c8y tedge container-bundle start tedge12345
+
+# Start and use basic auth credentials
+c8y tedge container-bundle start tedge12345 --auth-type basic
+```
+
 ### Bootstrap device via ssh
 
 Bootstrap a thin-edge.io enable device using SSH.

@@ -1,0 +1,364 @@
+#!/usr/bin/env bash
+set -e
+
+DEVICE_ID="${DEVICE_ID:-}"
+OPEN_WEBSITE="${OPEN_WEBSITE:-1}"
+AUTH_TYPE="${AUTH_TYPE:-certificate}"
+DEVICE_ONE_TIME_PASSWORD="${DEVICE_ONE_TIME_PASSWORD:-}"
+C8Y_DEVICE_PASSWORD="${C8Y_DEVICE_PASSWORD:-}"
+CA=${CA:-}
+IMAGE=${IMAGE:-"ghcr.io/thin-edge/tedge-container-bundle:latest"}
+PUBLISH_ALL=0
+PORT_OFFSET=0
+DRY_RUN=0
+NETWORK=${NETWORK:-tedge}
+
+if [ "${DEBUG:-}" = 1 ]; then
+    set -x
+fi
+
+usage() {
+    cat <<EOT >&2
+Start a new tedge-container-bundle instance
+
+It will download the latest image from the https://github.com/thin-edge/tedge-container-bundle/pkgs/container/tedge-container-bundle
+container register.
+
+The container images are published from the repository:
+
+* https://github.com/thin-edge/tedge-container-bundle
+
+c8y tedge container-bundle start [DEVICE_NAME] [--auth-type <certificate|basic>]
+
+Arguments
+  --auth-type <certificate|basic>  Authorization type to use when connection to Cumulocity. Allowed values:  certificate, basic
+                                   Defaults to 'certificate'
+  --image <container_image>        Container image to pull and use. Defaults to 'ghcr.io/thin-edge/tedge-container-bundle:latest'
+  --ca <c8y|self-signed>           Certificate authority to generate the device certificate (when auth-type is set to certificate).
+                                   The 'ca' option requires the Cumulocity Certificate Authority feature to be enabled in the tenant
+  --one-time-password <value>      One-time password to enrol the device using the Cumulocity Certificate Authority feature
+  --skip-website                   Don't open Cumulocity webpage
+  --dry                            Dry Run
+  --debug                          Turn on script debugging
+
+Examples
+
+  c8y tedge container-bundle start
+  # Start a tedge-container-bundle using a randomly generated device name
+
+  c8y tedge container-bundle start mydevice001
+  # Start a tedge-container-bundle using the device name 'mydevice001'
+
+  c8y tedge container-bundle start mydevice001 --auth-type basic
+  # Start a tedge-container-bundle using the device name 'mydevice001'
+
+  c8y tedge container-bundle start mydevice001 --ca c8y --one-time-password "e4mple3_;d"
+  # Start a container and enrol it using a one-time password
+EOT
+}
+
+fail() {
+    echo "ERROR: $*" >&2;
+    exit 1;
+}
+
+POSITIONAL_ARGS=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --auth-type)
+            AUTH_TYPE="$2"
+            shift
+            ;;
+        --image)
+            IMAGE="$2"
+            shift
+            ;;
+        --ca)
+            CA="$2"
+            shift
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --skip-website)
+            OPEN_WEBSITE=0
+            ;;
+        --debug)
+            set -x
+            ;;
+        --dry)
+            DRY_RUN=1
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+            ;;
+    esac
+    shift
+done
+
+# Only set if rest arguments are defined
+if [ "${#POSITIONAL_ARGS[@]}" -gt 0 ]; then
+    set -- "${POSITIONAL_ARGS[@]}"
+fi
+
+if [ $# -gt 0 ]; then
+    DEVICE_ID="$1"
+    shift
+else
+    DEVICE_ID=$(c8y template execute --template "'tedge_' + _.Hex(8)")
+    echo "Using randomly generated device name: $NAME" >&2
+fi
+
+# Try auto detecting container cli (based on what is available)
+if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
+    if command -V docker >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=docker
+    elif command -V nerdctl >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=nerdctl
+    elif command -V podman >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=podman
+    fi
+fi
+
+if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
+    echo "Error: Could not find a container cli, e.g. docker, nerdctl, podman" >&2
+    exit 1
+fi
+
+if [ "$DRY_RUN" = 1 ]; then
+    C8Y_TEDGE_CONTAINER_CLI="echo [DRY_RUN]    $C8Y_TEDGE_CONTAINER_CLI"
+    export C8Y_SETTINGS_DEFAULTS_DRY=true
+fi
+
+echo "Using container cli: $C8Y_TEDGE_CONTAINER_CLI" >&2
+
+
+supports_c8y_ca() {
+    ENABLED=$(c8y features get -n --key certificate-authority --select active -o csv 2>/dev/null ||:)
+    if [ "$ENABLED" != true ]; then
+        return 1
+    fi
+
+    # Apply minimum Cumulocity platform version check
+    if [ -z "$(c8y currenttenant version -n --filter "value version >2025.129.0")" ]; then
+        echo "INFO: Cumulocity version must be >2025.129.0 to use the certificate-authority feature" >&2
+        return 1
+    fi
+    return 0
+}
+
+delete_existing_device_user() {
+    # Remove any existing user in case if the device user has been registered
+    # with a different auth type then what is being used now. Otherwise the device
+    # won't be able to connect. This behaviour might change in the future
+    device_id="$1"
+    device_user="device_${device_id}"
+    if ! c8y users delete -n --id "$device_user" --silentExit --silentStatusCodes 404 --force >/dev/null 2>&1; then
+        echo "Warning: Failed to delete the existing device user: $device_user" >&2
+    fi
+}
+
+register_with_c8y_ca() {
+    # Register the device using the Cumulocity certificate-authority feature
+    # Delete in case if the registration already exists
+    c8y deviceregistration delete -n --id "$DEVICE_ID" --force >/dev/null 2>&1 ||:
+    delete_existing_device_user "$DEVICE_ID"
+
+    if [ -z "$DEVICE_ONE_TIME_PASSWORD" ]; then
+        DEVICE_ONE_TIME_PASSWORD=$(c8y template execute -n --template "_.PasswordUrlSafe(31)")
+    fi
+    if ! c8y deviceregistration register-ca -n --id "$DEVICE_ID" --one-time-password "$DEVICE_ONE_TIME_PASSWORD" --force >/dev/null; then
+        echo "Failed to register device using the Cumulocity Certificate Authority Feature" >&2
+        return 1
+    fi
+
+    BOOTSTRAP_OPTIONS+=(
+        -e "CA=c8y"
+        -e "DEVICE_ONE_TIME_PASSWORD=${DEVICE_ONE_TIME_PASSWORD}"
+    )
+}
+
+register_with_c8y_basic_auth() {
+    # Register the device using the Cumulocity certificate-authority feature
+    # Delete in case if the registration already exists
+    c8y deviceregistration delete -n --id "$DEVICE_ID" --force >/dev/null 2>&1 ||:
+    delete_existing_device_user "$DEVICE_ID"
+    
+    if [ -z "$C8Y_TENANT" ]; then
+        C8Y_TENANT=$(c8y session get -n --select tenant -o csv 2>/dev/null)
+    fi
+
+    if [ -z "$C8Y_DEVICE_PASSWORD" ]; then
+        C8Y_DEVICE_PASSWORD=$(c8y template execute -n --template "_.PasswordUrlSafe(31)")
+    fi
+
+    if ! c8y deviceregistration register-basic -n --id "$DEVICE_ID" --password "$C8Y_DEVICE_PASSWORD" --force >/dev/null; then
+        echo "Failed to register device using the Cumulocity Basic Auth" >&2
+        return 1
+    fi
+
+    # configure tedge for using basic auth
+    BOOTSTRAP_OPTIONS+=(
+        -v "${VOLUME_CREDENTIALS}:/etc/tedge/credentials" \
+        -e "TEDGE_C8Y_CREDENTIALS_PATH=/etc/tedge/credentials/credentials.toml" \
+    )
+
+    # Set the basic auth credentials in the volume
+    $C8Y_TEDGE_CONTAINER_CLI run --rm -it \
+        "${BOOTSTRAP_OPTIONS[@]}" \
+        "$IMAGE" \
+        /usr/bin/set-c8y-basic-auth.sh "${C8Y_TENANT}/device_${DEVICE_ID}" "$C8Y_DEVICE_PASSWORD"
+}
+
+register_with_self_signed_cert() {
+    # Register the device using the Cumulocity certificate-authority feature
+    # Delete in case if the registration already exists
+    c8y deviceregistration delete -n --id "$DEVICE_ID" --force >/dev/null 2>&1 ||:
+    delete_existing_device_user "$DEVICE_ID"
+
+    # Pre-register device
+    if ! c8y deviceregistration register-external-ca -n --id "$DEVICE_ID" --force >/dev/null; then
+        echo "Failed to register device using certificates (self-signed)" >&2
+        return 1
+    fi
+
+    # configure tedge for using basic auth
+    BOOTSTRAP_OPTIONS+=(
+        -v "${VOLUME_CREDENTIALS}:/etc/tedge/device-certs" \
+        -e "CA=self-signed" \
+        -e "TEDGE_C8Y_CREDENTIALS_PATH=/etc/tedge/credentials/credentials.toml" \
+    )
+
+    # Create self-signed certificate
+    if [ "$DRY_RUN" = 0 ]; then
+        $C8Y_TEDGE_CONTAINER_CLI run --rm -it \
+            "${BOOTSTRAP_OPTIONS[@]}" \
+            "$IMAGE" \
+            tedge cert create --device-id "$DEVICE_ID"
+    fi
+    
+    #
+    # Get cert from the device, then upload it to Cumulocity
+    #
+    # shellcheck disable=SC2016
+    if [ "$DRY_RUN" = 0 ]; then
+        DEVICE_CERT=$(
+            $C8Y_TEDGE_CONTAINER_CLI run --rm -it \
+                "${BOOTSTRAP_OPTIONS[@]}" \
+                "$IMAGE" \
+                sh -c 'cat "$(tedge config get device.cert_path 2>/dev/null)"'
+        )
+
+        # upload certificate to c8y
+        c8y devicemanagement certificates create -n \
+            --name "$DEVICE_ID" \
+            --file <(echo "$DEVICE_CERT") \
+            --status ENABLED \
+            --autoRegistrationEnabled \
+            --silentExit \
+            --silentStatusCodes 409 \
+            --dry \
+            --force >/dev/null
+    fi
+}
+
+# container resources
+CONTAINER_NAME="${DEVICE_ID}"
+VOLUME_DATA="${CONTAINER_NAME}"
+VOLUME_CREDENTIALS="${CONTAINER_NAME}-creds"
+
+$C8Y_TEDGE_CONTAINER_CLI pull "$IMAGE"
+
+echo "Removing any previous container and resources. container_name=$CONTAINER_NAME" >&2
+$C8Y_TEDGE_CONTAINER_CLI container stop "$CONTAINER_NAME" 2>/dev/null ||:
+$C8Y_TEDGE_CONTAINER_CLI container rm "$CONTAINER_NAME" 2>/dev/null ||:
+$C8Y_TEDGE_CONTAINER_CLI volume rm "$VOLUME_DATA" -f >/dev/null
+$C8Y_TEDGE_CONTAINER_CLI volume rm "$VOLUME_CREDENTIALS" -f >/dev/null
+
+echo "Creating container resources" >&2
+$C8Y_TEDGE_CONTAINER_CLI network create "$NETWORK" 2>/dev/null ||:
+$C8Y_TEDGE_CONTAINER_CLI volume create "$VOLUME_DATA" >/dev/null
+$C8Y_TEDGE_CONTAINER_CLI volume create "$VOLUME_CREDENTIALS" >/dev/null
+
+
+BOOTSTRAP_OPTIONS=()
+
+if [ -z "$CA" ]; then
+    if supports_c8y_ca; then
+        CA="c8y"
+    else
+        CA="self-signed"
+    fi
+fi
+
+case "$AUTH_TYPE" in
+    basic)
+        register_with_c8y_basic_auth
+        ;;
+    certificate)
+        case "$CA" in
+            self-signed)
+                echo "Bootstrapping using a self-signed certificate" >&2
+                register_with_self_signed_cert
+                ;;
+            c8y)
+                echo "Bootstrapping using the Cumulocity Certificate Authority feature" >&2
+                register_with_c8y_ca
+                ;;
+        esac
+        ;;
+esac
+
+RUN_OPTIONS=(
+    # Add label identify container launched by c8y-tedge
+    --label "c8y.tedge.container.bundle=1"
+)
+
+if [ "$C8Y_TEDGE_CONTAINER_CLI" = docker ]; then
+    RUN_OPTIONS+=(
+        --add-host host.docker.internal:host-gateway
+        -v /var/run/docker.sock:/var/run/docker.sock:rw
+    )
+fi
+
+if [ -z "$C8Y_DOMAIN" ]; then
+    C8Y_DOMAIN=$(c8y currenttenant get -n --select domainName -o csv)
+fi
+
+port() {
+    # return a port with a given offset to try
+    port="$1";
+    echo "$((port + PORT_OFFSET))"
+}
+
+if [ "$PUBLISH_ALL" = 1 ]; then
+    RUN_OPTIONS+=(
+        -p "127.0.0.1:$(port 1883):1883"
+        -p "127.0.0.1:$(port 8000):8000"
+        -p "127.0.0.1:$(port 8001):8001"
+    )
+fi
+
+# start the container
+$C8Y_TEDGE_CONTAINER_CLI run -d \
+    --name "${CONTAINER_NAME}" \
+    --restart always \
+    --network "$NETWORK" \
+    "${RUN_OPTIONS[@]}" \
+    -v "${VOLUME_DATA}:/data/tedge" \
+    -e TEDGE_C8Y_OPERATIONS_AUTO_LOG_UPLOAD=always \
+    -e "DEVICE_ID=${DEVICE_ID}" \
+    -e "TEDGE_C8Y_URL=${C8Y_DOMAIN}" \
+    -e "TEDGE_C8Y_AUTH_METHOD=auto" \
+    "${BOOTSTRAP_OPTIONS[@]}" \
+    "$IMAGE"
+
+# open the page after remote access configuration has been created
+if [ "$OPEN_WEBSITE" = 1 ]; then
+    MO_ID=$(c8y identity get -n --name "$DEVICE_ID" --select managedObject.id -o csv)
+    if [ -n "$MO_ID" ]; then
+        c8y applications open -n --device "$MO_ID" --application devicemanagement
+    fi
+fi

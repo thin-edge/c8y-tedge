@@ -1,0 +1,61 @@
+#!/bin/sh
+set -e
+
+if [ "${DEBUG:-}" = 1 ]; then
+    set -x
+fi
+
+usage() {
+    cat <<EOT >&2
+Open an interactive shell to an existing tedge-container-bundle instance
+
+c8y tedge container-bundle shell <DEVICE_NAME>
+
+Examples
+
+  c8y tedge container-bundle shell mydevice001
+  # Open a shell to the tedge container bundle with device name 'mydevice001'
+
+EOT
+}
+
+fail() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+if [ $# -lt 1 ]; then
+    fail "Missing device name (aka container name)"
+fi
+NAME="$1"
+shift
+
+# Try auto detecting container cli (based on what is available)
+if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
+    if command -V docker >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=docker
+    elif command -V nerdctl >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=nerdctl
+    elif command -V podman >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=podman
+    fi
+fi
+
+if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
+    echo "Error: Could not find a container cli, e.g. docker, nerdctl, podman" >&2
+    exit 1
+fi
+
+$C8Y_TEDGE_CONTAINER_CLI exec -it "$NAME" sh
