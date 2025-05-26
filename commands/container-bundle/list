@@ -1,0 +1,53 @@
+#!/bin/sh
+set -e
+
+if [ "${DEBUG:-}" = 1 ]; then
+    set -x
+fi
+
+usage() {
+    cat <<EOT >&2
+List the existing tedge-container-bundle instances
+
+c8y tedge container-bundle list
+
+Examples
+
+  c8y tedge container-bundle list
+  # List all existing instances
+
+EOT
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Try auto detecting container cli (based on what is available)
+if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
+    if command -V docker >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=docker
+    elif command -V nerdctl >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=nerdctl
+    elif command -V podman >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=podman
+    fi
+fi
+
+if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
+    echo "Error: Could not find a container cli, e.g. docker, nerdctl, podman" >&2
+    exit 1
+fi
+
+echo "Using container cli: $C8Y_TEDGE_CONTAINER_CLI" >&2
+
+echo "Existing tedge-container-bundle instances (label=c8y.tedge.container.bundle=1)" >&2
+$C8Y_TEDGE_CONTAINER_CLI container list --filter "label=c8y.tedge.container.bundle=1" --format="{{.Names}}" | sed 's|^/||g'

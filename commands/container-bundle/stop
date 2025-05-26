@@ -1,0 +1,88 @@
+#!/bin/sh
+set -e
+
+KEEP_DEVICE="${KEEP_DEVICE:-0}"
+
+if [ "${DEBUG:-}" = 1 ]; then
+    set -x
+fi
+
+usage() {
+    cat <<EOT >&2
+Stop an existing tedge-container-bundle instance
+
+c8y tedge container-bundle stop <DEVICE_NAME> [--keep]
+
+Arguments
+  --keep        Don't delete the device and device user in Cumulocity
+
+Examples
+
+  c8y tedge container-bundle stop mydevice001
+  # Stop an tedge-container-bundle instance with the device name 'mydevice001'
+
+  c8y tedge container-bundle stop mydevice001 --keep
+  # Stop an tedge-container-bundle instance with the device name 'mydevice001'
+
+EOT
+}
+
+fail() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+POSITIONAL_ARGS=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --keep)
+            KEEP_DEVICE=1
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            POSITIONAL_ARGS="$POSITIONAL_ARGS $1"
+            ;;
+    esac
+    shift
+done
+
+# shellcheck disable=SC2086
+set -- $POSITIONAL_ARGS
+
+if [ $# -lt 1 ]; then
+    fail "Missing device name (aka project name)"
+fi
+NAME="$1"
+shift
+
+# Try auto detecting container cli (based on what is available)
+if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
+    if command -V docker >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=docker
+    elif command -V nerdctl >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=nerdctl
+    elif command -V podman >/dev/null 2>&1; then
+        C8Y_TEDGE_CONTAINER_CLI=podman
+    fi
+fi
+
+if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
+    echo "Error: Could not find a container cli, e.g. docker, nerdctl, podman" >&2
+    exit 1
+fi
+
+echo "Using container cli: $C8Y_TEDGE_CONTAINER_CLI" >&2
+
+$C8Y_TEDGE_CONTAINER_CLI container stop "$NAME" >/dev/null 2>&1 ||:
+$C8Y_TEDGE_CONTAINER_CLI container rm "$NAME" >/dev/null 2>&1 ||:
+
+# Delete the device from Cumulocity
+if [ "$KEEP_DEVICE" != 1 ]; then
+    echo "Removing device and related device user. externalId=$NAME" >&2
+    c8y identity get -n --name "$NAME" --silentExit --silentStatusCodes 404,403,401 | c8y devices delete --cascade --force >/dev/null ||:
+    c8y users delete --id "device_$NAME" --silentExit --silentStatusCodes 404,403,401 --force >/dev/null ||:
+fi
