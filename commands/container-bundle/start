@@ -8,7 +8,8 @@ DEVICE_ONE_TIME_PASSWORD="${DEVICE_ONE_TIME_PASSWORD:-}"
 C8Y_DEVICE_PASSWORD="${C8Y_DEVICE_PASSWORD:-}"
 CA=${CA:-}
 IMAGE=${IMAGE:-"ghcr.io/thin-edge/tedge-container-bundle:latest"}
-PUBLISH_ALL=0
+PUBLISH_ALL=${PUBLISH_ALL:-0}
+STANDARD_PORTS=${STANDARD_PORTS:-1}
 PORT_OFFSET=0
 DRY_RUN=0
 NETWORK=${NETWORK:-tedge}
@@ -37,6 +38,8 @@ Arguments
   --ca <c8y|self-signed>           Certificate authority to generate the device certificate (when auth-type is set to certificate).
                                    The 'ca' option requires the Cumulocity Certificate Authority feature to be enabled in the tenant
   --one-time-password <value>      One-time password to enrol the device using the Cumulocity Certificate Authority feature
+  --no-ports                       Don't publish any ports from the container to the host
+  --publish-all                    Publish all tedge ports to randomized ports on the host
   --skip-website                   Don't open Cumulocity webpage
   --dry                            Dry Run
   --debug                          Turn on script debugging
@@ -54,6 +57,12 @@ Examples
 
   c8y tedge container-bundle start mydevice001 --ca c8y --one-time-password "e4mple3_;d"
   # Start a container and enrol it using a one-time password
+
+  c8y tedge container-bundle start --no-ports
+  # Start a container but don't map any of the ports to host (useful to avoid clashing ports)
+
+  c8y tedge container-bundle start --publish-all
+  # Start a container and publish all ports but map to randomly assigned host ports
 EOT
 }
 
@@ -76,6 +85,20 @@ while [ $# -gt 0 ]; do
             ;;
         --ca)
             CA="$2"
+            shift
+            ;;
+        # Don't publish any ports
+        --no-ports)
+            PUBLISH_ALL=0
+            STANDARD_PORTS=0
+            ;;
+        # Publish all ports
+        --publish-all|-P)
+            PUBLISH_ALL=1
+            ;;
+        # Add an offset to the standard ports, e.g. an offset of 100, will then use MQTT port 1983, TEDGE API 8100, C8Y API 8101
+        --port-offset)
+            PORT_OFFSET="$2"
             shift
             ;;
         --help|-h)
@@ -272,15 +295,15 @@ VOLUME_CREDENTIALS="${CONTAINER_NAME}-creds"
 $C8Y_TEDGE_CONTAINER_CLI pull "$IMAGE"
 
 echo "Removing any previous container and resources. container_name=$CONTAINER_NAME" >&2
-$C8Y_TEDGE_CONTAINER_CLI container stop "$CONTAINER_NAME" 2>/dev/null ||:
-$C8Y_TEDGE_CONTAINER_CLI container rm "$CONTAINER_NAME" 2>/dev/null ||:
-$C8Y_TEDGE_CONTAINER_CLI volume rm "$VOLUME_DATA" -f >/dev/null
-$C8Y_TEDGE_CONTAINER_CLI volume rm "$VOLUME_CREDENTIALS" -f >/dev/null
+$C8Y_TEDGE_CONTAINER_CLI container stop "$CONTAINER_NAME" >/dev/null 2>&1 ||:
+$C8Y_TEDGE_CONTAINER_CLI container rm "$CONTAINER_NAME" >/dev/null 2>&1 ||:
+$C8Y_TEDGE_CONTAINER_CLI volume rm "$VOLUME_DATA" -f >/dev/null 2>&1
+$C8Y_TEDGE_CONTAINER_CLI volume rm "$VOLUME_CREDENTIALS" -f >/dev/null 2>&1
 
 echo "Creating container resources" >&2
-$C8Y_TEDGE_CONTAINER_CLI network create "$NETWORK" 2>/dev/null ||:
-$C8Y_TEDGE_CONTAINER_CLI volume create "$VOLUME_DATA" >/dev/null
-$C8Y_TEDGE_CONTAINER_CLI volume create "$VOLUME_CREDENTIALS" >/dev/null
+$C8Y_TEDGE_CONTAINER_CLI network create "$NETWORK" >/dev/null 2>&1 ||:
+$C8Y_TEDGE_CONTAINER_CLI volume create "$VOLUME_DATA" >/dev/null 2>&1
+$C8Y_TEDGE_CONTAINER_CLI volume create "$VOLUME_CREDENTIALS" >/dev/null 2>&1
 
 
 BOOTSTRAP_OPTIONS=()
@@ -334,6 +357,14 @@ port() {
 }
 
 if [ "$PUBLISH_ALL" = 1 ]; then
+    # use random ports
+    echo "Mapping container ports to randomly assigned ports on the host" >&2
+    RUN_OPTIONS+=(
+        -p "127.0.0.1:0:1883"
+        -p "127.0.0.1:0:8000"
+        -p "127.0.0.1:0:8001"
+    )
+elif [ "$STANDARD_PORTS" = 1 ]; then
     RUN_OPTIONS+=(
         -p "127.0.0.1:$(port 1883):1883"
         -p "127.0.0.1:$(port 8000):8000"
