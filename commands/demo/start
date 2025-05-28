@@ -131,16 +131,53 @@ fi
 echo "Bootstrapping" >&2
 c8y tedge bootstrap-container tedge --device-id "$NAME" --skip-website --auth-type "$AUTH_TYPE" "$@"
 
-# Create a default remoteaccess configuration but only if the user has the correct permissions
-MO_ID=$(c8y identity get -n --name "$NAME" --select managedObject.id -o csv)
-if [ -n "$MO_ID" ]; then
+check_c8y_role() {
+    # check if the current user has a given Cumulocity Role
+    # 0 = has all roles, 1 = does not have all roles
+    has_all_roles=0
+    USER_ROLES=$(c8y currentuser get -n --select 'effectiveRoles.*.id' -o csv 2>/dev/null)
+    while [ $# -gt 0 ]; do
+        ROLE="$1"
+        case "$USER_ROLES" in
+            *"$ROLE"*)
+                # role exists
+                ;;
+            *)
+                has_all_roles=1
+                ;;
+        esac
+        shift
+    done
+    return "$has_all_roles"
+}
+
+has_c8y_application() {
+    application_name="$1"
+    [ -n "$(c8y currenttenant listApplications -n --filter "name eq $application_name" --filter "type eq MICROSERVICE")" ]
+}
+
+configure_cloud_remote_access() {
+    mo_id="$1"
+
+    # Check if the remote access application exists
+    if ! has_c8y_application cloud-remote-access; then
+        echo "The cloud-remote-access (CRA) is not enabled on the tenant so you won't be able to use the remote access features" >&2
+        return 0
+    fi
+
+    if ! check_c8y_role "ROLE_REMOTE_ACCESS_ADMIN"; then
+        echo "Warning: We couldn't add the remote access configuration as you don't have the required permissions"
+        echo "To fix this: Add the 'Remote Access' (ROLE_REMOTE_ACCESS_ADMIN) permission to a role like 'Admin' and assign yourself to it"
+        return 0
+    fi
+
     # Check if the user had correct permissions to use remoteaccess
-    if c8y remoteaccess configurations list -n --device "$MO_ID" --silentStatusCodes 403; then
+    if c8y remoteaccess configurations list -n --device "$mo_id" --silentStatusCodes 403; then
         # Add webssh config if it is not already existing
-        c8y remoteaccess configurations get -n --id webssh --device "$MO_ID" --silentStatusCodes 404 ||
+        c8y remoteaccess configurations get -n --id webssh --device "$mo_id" --silentStatusCodes 404 ||
             c8y remoteaccess configurations create-webssh \
                 -n \
-                --device "$MO_ID" \
+                --device "$mo_id" \
                 --name "webssh" \
                 --credentialsType USER_PASS \
                 --username iotadmin \
@@ -149,10 +186,10 @@ if [ -n "$MO_ID" ]; then
         
         # Add passthrough connection for monit for quick demoing of the c8y http proxy
         # See the project for more details: https://github.com/Cumulocity-IoT/cumulocity-remote-access-cloud-http-proxy
-        c8y remoteaccess configurations get -n --id "http:monit" --device "$MO_ID" --silentStatusCodes 404 ||
+        c8y remoteaccess configurations get -n --id "http:monit" --device "$mo_id" --silentStatusCodes 404 ||
             c8y remoteaccess configurations create-passthrough \
                 -n \
-                --device "$MO_ID" \
+                --device "$mo_id" \
                 --name "http:monit" \
                 --hostname "127.0.0.1" \
                 --port "2812" \
@@ -160,10 +197,10 @@ if [ -n "$MO_ID" ]; then
 
         # Add passthrough connection to demo a native ssh connection
         # It will copy the users public keys into the authorized keys for the iotadmin user (same used for webssh)
-        c8y remoteaccess configurations get -n --id native-ssh --device "$MO_ID" --silentStatusCodes 404 ||
+        c8y remoteaccess configurations get -n --id native-ssh --device "$mo_id" --silentStatusCodes 404 ||
             c8y remoteaccess configurations create-passthrough \
                 -n \
-                --device "$MO_ID" \
+                --device "$mo_id" \
                 --name "native-ssh" \
                 --hostname "127.0.0.1" \
                 --port 22 \
@@ -181,9 +218,15 @@ if [ -n "$MO_ID" ]; then
         echo "Warning: We couldn't add the remote access configuration as you don't have the required permissions"
         echo "To fix this: Add the 'Remote Access' permission to a role like 'Admin' and assign yourself to it"
     fi
-fi
+}
 
-# open the page after remote access configuration has been created
-if [ "$OPEN_WEBSITE" = 1 ]; then
-    c8y applications open --device "$MO_ID" --application devicemanagement
+# Create a default remoteaccess configuration but only if the user has the correct permissions
+MO_ID=$(c8y identity get -n --name "$NAME" --select managedObject.id -o csv)
+if [ -n "$MO_ID" ]; then
+    configure_cloud_remote_access "$MO_ID"
+    
+    # open the page after remote access configuration has been created
+    if [ "$OPEN_WEBSITE" = 1 ]; then
+        c8y applications open -n --device "$MO_ID" --application devicemanagement
+    fi
 fi
