@@ -55,6 +55,9 @@ Examples
   c8y tedge container-bundle start mydevice001 --auth-type basic
   # Start a tedge-container-bundle using the device name 'mydevice001'
 
+  c8y tedge container-bundle start mydevice001 --ca self-signed
+  # Start a tedge-container-bundle using the device name 'mydevice001' and a self-signed certificate
+
   c8y tedge container-bundle start mydevice001 --ca c8y --one-time-password "e4mple3_;d"
   # Start a container and enrol it using a one-time password
 
@@ -247,43 +250,50 @@ register_with_self_signed_cert() {
         return 1
     fi
 
-    # configure tedge for using basic auth
+    # configure tedge to use a self-signed certificate
     BOOTSTRAP_OPTIONS+=(
         -v "${VOLUME_CREDENTIALS}:/etc/tedge/device-certs" \
         -e "CA=self-signed" \
-        -e "TEDGE_C8Y_CREDENTIALS_PATH=/etc/tedge/credentials/credentials.toml" \
     )
 
-    # Create self-signed certificate
+    # shellcheck disable=SC2016
     if [ "$DRY_RUN" = 0 ]; then
+
+        # Create self-signed certificate
         $C8Y_TEDGE_CONTAINER_CLI run --rm -it \
             "${BOOTSTRAP_OPTIONS[@]}" \
             "$IMAGE" \
             tedge cert create --device-id "$DEVICE_ID"
-    fi
-    
-    #
-    # Get cert from the device, then upload it to Cumulocity
-    #
-    # shellcheck disable=SC2016
-    if [ "$DRY_RUN" = 0 ]; then
-        DEVICE_CERT=$(
-            $C8Y_TEDGE_CONTAINER_CLI run --rm -it \
-                "${BOOTSTRAP_OPTIONS[@]}" \
-                "$IMAGE" \
-                sh -c 'cat "$(tedge config get device.cert_path 2>/dev/null)"'
-        )
+
+        # Get the public certificate
+        # Note: avoid using process substitution to be more compatible
+        DEVICE_CERT_FILE="$(mktemp)"
+        $C8Y_TEDGE_CONTAINER_CLI run --rm -it \
+            "${BOOTSTRAP_OPTIONS[@]}" \
+            "$IMAGE" \
+            sh -c 'cat "$(tedge config get device.cert_path 2>/dev/null)"' > "$DEVICE_CERT_FILE"
 
         # upload certificate to c8y
-        c8y devicemanagement certificates create -n \
+        if ! c8y devicemanagement certificates create -n \
             --name "$DEVICE_ID" \
-            --file <(echo "$DEVICE_CERT") \
+            --file "$DEVICE_CERT_FILE" \
             --status ENABLED \
             --autoRegistrationEnabled \
             --silentExit \
             --silentStatusCodes 409 \
-            --dry \
-            --force >/dev/null
+            --force >/dev/null; then
+
+            cat <<EOT >&2
+
+ERROR: Failed to upload the device's certificate to Cumulocity!
+
+  Please check that your Cumulocity Users has the "Tenant Manager" role or permissions and try again
+
+EOT
+            exit 1
+        fi
+
+        rm -f "$DEVICE_CERT_FILE"
     fi
 }
 
