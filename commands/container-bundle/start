@@ -274,14 +274,24 @@ register_with_self_signed_cert() {
             sh -c 'cat "$(tedge config get device.cert_path 2>/dev/null)"' > "$DEVICE_CERT_FILE"
 
         # upload certificate to c8y
-        c8y devicemanagement certificates create -n \
+        if ! c8y devicemanagement certificates create -n \
             --name "$DEVICE_ID" \
             --file "$DEVICE_CERT_FILE" \
             --status ENABLED \
             --autoRegistrationEnabled \
             --silentExit \
             --silentStatusCodes 409 \
-            --force >/dev/null
+            --force >/dev/null; then
+
+            cat <<EOT >&2
+
+ERROR: Failed to upload the device's certificate to Cumulocity!
+
+  Please check that your Cumulocity Users has the "Tenant Manager" role or permissions and try again
+
+EOT
+            exit 1
+        fi
 
         rm -f "$DEVICE_CERT_FILE"
     fi
