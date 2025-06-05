@@ -55,6 +55,9 @@ Examples
   c8y tedge container-bundle start mydevice001 --auth-type basic
   # Start a tedge-container-bundle using the device name 'mydevice001'
 
+  c8y tedge container-bundle start mydevice001 --ca self-signed
+  # Start a tedge-container-bundle using the device name 'mydevice001' and a self-signed certificate
+
   c8y tedge container-bundle start mydevice001 --ca c8y --one-time-password "e4mple3_;d"
   # Start a container and enrol it using a one-time password
 
