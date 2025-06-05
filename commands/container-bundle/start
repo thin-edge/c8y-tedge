@@ -131,7 +131,7 @@ if [ $# -gt 0 ]; then
     shift
 else
     DEVICE_ID=$(c8y template execute --template "'tedge_' + _.Hex(8)")
-    echo "Using randomly generated device name: $NAME" >&2
+    echo "Using randomly generated device name: $DEVICE_ID" >&2
 fi
 
 # Try auto detecting container cli (based on what is available)
