@@ -39,10 +39,13 @@ Arguments
                                    The 'ca' option requires the Cumulocity Certificate Authority feature to be enabled in the tenant
   --one-time-password <value>      One-time password to enrol the device using the Cumulocity Certificate Authority feature
   --no-ports                       Don't publish any ports from the container to the host
+  --port-offset <int>              Offset the published ports by a given number, e.g. 100. This can avoid conflicting with other services
+                                   using the standard ports, 1883, 8000 and 8001.
   --publish-all                    Publish all tedge ports to randomized ports on the host
   --skip-website                   Don't open Cumulocity webpage
   --dry                            Dry Run
   --debug                          Turn on script debugging
+  --help|-h                        Show this help
 
 Examples
 
@@ -66,6 +69,9 @@ Examples
 
   c8y tedge container-bundle start --publish-all
   # Start a container and publish all ports but map to randomly assigned host ports
+
+  c8y tedge container-bundle start --port-offset 10
+  # Start a container and publish ports but offset them by 100, e.g. 1883 => 1893, 8000 => 8010, 8001 => 8011
 EOT
 }
 
