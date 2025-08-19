@@ -461,7 +461,7 @@ register_with_c8y_ca() {
     if [ -z "$ONE_TIME_PASSWORD" ]; then
         ONE_TIME_PASSWORD=$(c8y template execute --template "_.PasswordUrlSafe(31)")
     fi
-    c8y deviceregistration register-ca --id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD"
+    c8y deviceregistration register-ca -n --force --id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD" >/dev/null
     "${EXEC_CMD[@]}" "$TARGET" $SUDO tedge cert download c8y --device-id "$DEVICE_ID" --one-time-password "$ONE_TIME_PASSWORD" --retry-every 5s --max-timeout 30s  2>/dev/null ||:
 }
 
