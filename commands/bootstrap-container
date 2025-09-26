@@ -290,7 +290,7 @@ register_with_c8y_basic_auth() {
     # Set the credentials
     C8Y_DEVICE_USER="device_${DEVICE_ID}"
     TEDGE_C8Y_CREDS=$(printf '[c8y]\nusername = "%s"\npassword = "%s"' "$C8Y_TENANT/$C8Y_DEVICE_USER" "$C8Y_DEVICE_PASSWORD")
-    "${EXEC_CMD[@]}" "$TARGET" sh -c "printf '%s' '$TEDGE_C8Y_CREDS' '$REMOTE_CMD_CREATE_CREDS' | sudo tee /etc/tedge/credentials.toml >/dev/null"
+    "${EXEC_CMD[@]}" "$TARGET" sh -c "printf '%s' '$TEDGE_C8Y_CREDS' '$REMOTE_CMD_CREATE_CREDS' | sudo tee /etc/tedge/credentials.toml >/dev/null && sudo chown tedge:tedge /etc/tedge/credentials.toml && sudo chmod 600 /etc/tedge/credentials.toml"
 }
 
 bootstrap_self_signed() {
