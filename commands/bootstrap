@@ -912,7 +912,7 @@ check_ssh_connection() {
 install_tedge_if_missing() {
     if ! "${EXEC_CMD[@]}" "$target" tedge --version; then
         echo "Installing thin-edge.io as it is missing on the device ($target)" >&2
-        "${EXEC_CMD[@]}" "$target" sh -c \'wget -O - thin-edge.io/install.sh | sh -s\'
+        "${EXEC_CMD[@]}" "$target" "wget -O - thin-edge.io/install.sh | sh -s"
     fi
 }
 
