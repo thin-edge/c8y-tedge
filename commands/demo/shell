@@ -60,4 +60,4 @@ if [ ! -f "$COMPOSE_FILE" ]; then
     exit 0
 fi
 
-(cd "$PROJECT_DIR" && $DOCKER_CMD compose exec tedge zsh)
+(cd "$PROJECT_DIR" && $DOCKER_CMD compose -f "$COMPOSE_FILE" exec tedge zsh)
