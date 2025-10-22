@@ -59,6 +59,16 @@ fi
 NAME="$1"
 shift
 
+# Check if docker needs sudo
+DOCKER_CMD="docker"
+if ! docker info >/dev/null 2>&1; then
+    if command -v sudo >/dev/null 2>&1; then
+        DOCKER_CMD="sudo docker"
+    else
+        fail "Docker is not accessible. Please ensure you have permission to run docker."
+    fi
+fi
+
 PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"
 export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
 
@@ -67,7 +77,7 @@ if [ ! -f "$COMPOSE_FILE" ]; then
     exit 0
 fi
 
-(cd "$PROJECT_DIR" && docker compose down -v)
+(cd "$PROJECT_DIR" && $DOCKER_CMD compose down -v)
 rm -rf "$PROJECT_DIR"
 
 # Delete the device from Cumulocity
