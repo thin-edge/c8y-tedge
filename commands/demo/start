@@ -5,6 +5,7 @@ FEATURES="${FEATURES:-}"
 BOOTSTRAP="${BOOTSTRAP:-1}"
 OPEN_WEBSITE="${OPEN_WEBSITE:-1}"
 AUTH_TYPE="${AUTH_TYPE:-certificate}"
+PUBLISH_PORTS=${PUBLISH_PORTS:-0}
 
 if [ "${DEBUG:-}" = 1 ]; then
     set -x
@@ -24,6 +25,8 @@ Arguments
   --features <feature_set>         List of features to activate. e.g. nopki
   --auth-type <certificate|basic>  Authorization type to use when connection to Cumulocity. Allowed values:  certificate, basic
                                    Defaults to 'certificate'
+  --publish-ports                  Expose thin-edge.io ports, 1883, 8000 and 8001
+  --publish-ports-random           Expose thin-edge.io ports on randomized free ports
   --skip-bootstrap                 Don't bootstrap the demo setup
   --skip-website                   Don't open Cumulocity webpage
 
@@ -40,6 +43,13 @@ Examples
 
   c8y tedge demo start mydevice001 --features nopki
   # Start a tedge-demo-container but disable the usage of the local PKI
+
+  c8y tedge demo start mydevice001 --publish-ports
+  # Start a tedge-demo-container and expose thin-edge.io ports like 1883 (mqtt), 8000 (tedge-agent) and 8001 (c8y proxy)
+
+  c8y tedge demo start mydevice001 --publish-ports-random
+  # Start a tedge-demo-container and expose thin-edge.io ports like 1883 (mqtt), 8000 (tedge-agent) and 8001 (c8y proxy)
+  # on any free ports (randomized)
 
 EOT
 }
@@ -60,6 +70,12 @@ while [ $# -gt 0 ]; do
         --auth-type)
             AUTH_TYPE="$2"
             shift
+            ;;
+        --publish-ports|-P)
+            PUBLISH_PORTS=1
+            ;;
+        --publish-ports-random)
+            PUBLISH_PORTS=2
             ;;
         --help|-h)
             usage
@@ -121,6 +137,22 @@ if [ -n "$FEATURES" ]; then
     echo "Setting non-default features: FEATURES=$FEATURES" >&2
     echo "FEATURES='$FEATURES'" > "$PROJECT_DIR/.env"
 fi
+
+CONTENTS=$(cat "$COMPOSE_FILE")
+case "$PUBLISH_PORTS" in
+    1)
+        # publish ports
+        c8y template execute \
+            --template "std.manifestYamlDoc(std.parseYaml('$CONTENTS') + {services+:{tedge+:{ports:['1883:1883', '8000:8000', '8001:8001']}}}, false, false)" \
+            > "$COMPOSE_FILE"
+        ;;
+    2)
+        # publish ports using randomized free ports
+        c8y template execute \
+            --template "std.manifestYamlDoc(std.parseYaml('$CONTENTS') + {services+:{tedge+:{ports:['0:1883', '0:8000', '0:8001']}}}, false, false)" \
+            > "$COMPOSE_FILE"
+        ;;
+esac
 
 echo "Running docker compose up -d" >&2
 (cd "$PROJECT_DIR" && $DOCKER_CMD compose -f "$COMPOSE_FILE" up -d)
