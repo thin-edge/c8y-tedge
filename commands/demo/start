@@ -121,6 +121,14 @@ COMPOSE_URL="https://raw.githubusercontent.com/thin-edge/tedge-demo-container/ma
 PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"
 export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
 
+# Just start the project if it already exists
+if [ -f "$COMPOSE_FILE" ]; then
+    echo "Project already exists: path=$PROJECT_DIR" >&2
+    echo "Running docker compose up -d" >&2
+    (cd "$PROJECT_DIR" && $DOCKER_CMD compose -f "$COMPOSE_FILE" up -d)
+    exit 0
+fi
+
 echo "Creating demo folder: $PROJECT_DIR" >&2
 mkdir -p "$PROJECT_DIR"
 
