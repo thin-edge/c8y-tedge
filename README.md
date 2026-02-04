@@ -52,6 +52,20 @@ c8y tedge demo start tedge0001 --auth-type basic
 c8y tedge demo start tedge0001 --auth-type certificate
 ```
 
+### Stop/Delete a demo container
+
+To stop a running demo, use the following command. This will stop the container but keep the container and its information.
+
+```sh
+c8y tedge demo stop tedge0001
+```
+
+If you want to fully delete the demo (including deleting it from the cloud), then run:
+
+```sh
+c8y tedge demo delete tedge0001
+```
+
 ### Start a tedge-container-bundle container
 
 The [tedge-container-bundle](https://github.com/thin-edge/tedge-container-bundle) is a lighter weight containerized version of thin-edge.io where it can be used to deploy on devices which are already running a container engine and you don't want to install thin-edge.io on the host.
