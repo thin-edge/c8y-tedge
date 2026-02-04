@@ -22,8 +22,8 @@ Examples
   c8y test demo list | jq
   # List all demo in json format
 
-  c8y test demo list --output csv
-  # List all demo in csv format
+  c8y tedge demo list | jq -r .name
+  # list the demos and only return the .name property
 
 EOT
 }
