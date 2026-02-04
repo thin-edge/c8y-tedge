@@ -11,13 +11,24 @@ List the existing tedge-container-demo instances
 
 c8y tedge demo list
 
+Arguments
+  --output,-o <table|json|csv|tsv>      Output format. Defaults to table when writing to console, otherwise json.
+
 Examples
 
   c8y tedge demo list
   # List all existing demos
 
+  c8y test demo list | jq
+  # List all demo in json format
+
+  c8y tedge demo list | jq -r .name
+  # list the demos and only return the .name property
+
 EOT
 }
+
+OUTPUT_FORMAT=
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -25,15 +36,55 @@ while [ $# -gt 0 ]; do
             usage
             exit 0
             ;;
+        --output|-o)
+            OUTPUT_FORMAT="$2"
+            shift
+            ;;
         *)
             break
             ;;
     esac
 done
 
-PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"
-export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
+# Check if docker needs sudo
+DOCKER_CMD="docker"
+if ! docker info >/dev/null 2>&1; then
+    if command -v sudo >/dev/null 2>&1; then
+        DOCKER_CMD="sudo docker"
+    else
+        fail "Docker is not accessible. Please ensure you have permission to run docker."
+    fi
+fi
 
-echo "Existing demos under: $PROJECT_DIR" >&2
+BASE_PROJECT_DIR="$HOME/.tedge/tedge-demo-container"
 
-ls -c1 "$PROJECT_DIR"
+if [ -n "$OUTPUT_FORMAT" ]; then
+    export C8Y_SETTINGS_DEFAULTS_OUTPUT="$OUTPUT_FORMAT"
+fi
+
+echo "Existing demos under: $BASE_PROJECT_DIR" >&2
+
+# loop through the demo container and print using go-c8y-cli formatting
+(
+    for PROJECT_DIR in "$BASE_PROJECT_DIR"/*/; do
+    [ -d "$PROJECT_DIR" ] || continue
+    NAME="$(basename "$PROJECT_DIR")"
+
+    COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
+
+    # get tedge config
+    CONFIG=$(cd "$PROJECT_DIR" && $DOCKER_CMD compose -f "$COMPOSE_FILE" exec tedge tedge config list 2>/dev/null ||:)
+    URL=$(echo "$CONFIG" | grep c8y.http | head -n1 | cut -d= -f2 | cut -d: -f1)
+    if [ -z "$URL" ]; then
+        URL=$(echo "$CONFIG" | grep c8y.url | head -n1 | cut -d= -f2 | cut -d: -f1)
+    fi
+    if [ -n "$URL" ]; then
+        URL="https://$URL"
+    fi
+
+    # get tedge version
+    TEDGE_VERSION=$(cd "$PROJECT_DIR" && $DOCKER_CMD compose -f "$COMPOSE_FILE" exec tedge tedge --version 2>/dev/null | cut -d' ' -f2- ||:)
+
+    printf '{"name":"%s","url":"%s","tedgeVersion":"%s"}\n' "$NAME" "${URL:-"-"}" "$TEDGE_VERSION"
+done
+) | C8Y_SETTINGS_VIEWS_COLUMNPADDING=20 c8y util show --select name,tedgeVersion,url
