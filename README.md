@@ -66,6 +66,14 @@ If you want to fully delete the demo (including deleting it from the cloud), the
 c8y tedge demo delete tedge0001
 ```
 
+### List demo containers
+
+You can list the demo container that are already configured on your machine using the following command:
+
+```sh
+c8y tedge demo restart
+```
+
 ### Start a tedge-container-bundle container
 
 The [tedge-container-bundle](https://github.com/thin-edge/tedge-container-bundle) is a lighter weight containerized version of thin-edge.io where it can be used to deploy on devices which are already running a container engine and you don't want to install thin-edge.io on the host.
