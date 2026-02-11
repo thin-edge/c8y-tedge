@@ -87,4 +87,4 @@ if [ "$KEEP_DEVICE" != 1 ]; then
     c8y users delete --id "device_$NAME" --silentExit --silentStatusCodes 404,403,401 --force >/dev/null ||:
 fi
 
-echo "Stopped and delete demo" >&2
+echo "Stopped and deleted demo" >&2
