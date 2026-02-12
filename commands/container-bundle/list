@@ -50,4 +50,35 @@ fi
 echo "Using container cli: $C8Y_TEDGE_CONTAINER_CLI" >&2
 
 echo "Existing tedge-container-bundle instances (label=c8y.tedge.container.bundle=1)" >&2
-$C8Y_TEDGE_CONTAINER_CLI container list --filter "label=c8y.tedge.container.bundle=1" --format="{{.Names}}" | sed 's|^/||g'
+
+CONTAINER_NAMES=$($C8Y_TEDGE_CONTAINER_CLI container list -a --filter "label=c8y.tedge.container.bundle=1" --format="{{.Names}},{{.State}}" | sed 's|^/||g')
+
+if [ -z "$CONTAINER_NAMES" ]; then
+    echo "No tedge-container-bundles instances exist" >&2
+    exit 0
+fi
+
+# loop through the demo container and print using go-c8y-cli formatting
+(
+    for CONTAINER_INFO in $CONTAINER_NAMES; do
+
+        NAME=$(echo "$CONTAINER_INFO" | cut -d, -f1)
+        STATE=$(echo "$CONTAINER_INFO" | cut -d, -f2)
+
+        # get tedge config
+        CONFIG=$("$C8Y_TEDGE_CONTAINER_CLI" exec "$NAME" tedge config list 2>/dev/null ||:)
+        URL=$(echo "$CONFIG" | grep c8y.http | head -n1 | cut -d= -f2 | cut -d: -f1)
+        if [ -z "$URL" ]; then
+            URL=$(echo "$CONFIG" | grep c8y.url | head -n1 | cut -d= -f2 | cut -d: -f1)
+        fi
+        if [ -n "$URL" ]; then
+            URL="https://$URL"
+        fi
+
+        # get tedge version
+        TEDGE_VERSION=$("$C8Y_TEDGE_CONTAINER_CLI" exec "$NAME" tedge --version 2>/dev/null | cut -d' ' -f2- ||:)
+
+        printf '{"name":"%s","state":"%s","url":"%s","tedgeVersion":"%s"}\n' "$NAME" "${STATE:-"-"}" "${URL:-"-"}" "${TEDGE_VERSION:-"-"}"
+    done
+) | C8Y_SETTINGS_VIEWS_COLUMNPADDING=20 c8y util show --select name,state,tedgeVersion,url
+
