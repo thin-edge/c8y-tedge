@@ -308,6 +308,22 @@ CONTAINER_NAME="${DEVICE_ID}"
 VOLUME_DATA="${CONTAINER_NAME}"
 VOLUME_CREDENTIALS="${CONTAINER_NAME}-creds"
 
+# Just start the project if it already exists
+EXISTING_CONTAINER_STATE=$($C8Y_TEDGE_CONTAINER_CLI container list -a --filter "label=c8y.tedge.container.bundle=1" --filter "name=$CONTAINER_NAME" --format="{{.State}}" 2>/dev/null ||:)
+if [ -n "$EXISTING_CONTAINER_STATE" ]; then
+    echo "container-bundle already exists: name=$CONTAINER_NAME" >&2
+    case "$EXISTING_CONTAINER_STATE" in
+        running)
+            echo "Container is already running. name=$CONTAINER_NAME" >&2
+            ;;
+        *)
+            echo "Starting the container. name=$CONTAINER_NAME" >&2
+            $C8Y_TEDGE_CONTAINER_CLI container start "$CONTAINER_NAME" >/dev/null ||:
+            ;;
+    esac
+    exit 0
+fi
+
 $C8Y_TEDGE_CONTAINER_CLI pull "$IMAGE"
 
 echo "Removing any previous container and resources. container_name=$CONTAINER_NAME" >&2
