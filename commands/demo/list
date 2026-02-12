@@ -85,6 +85,10 @@ echo "Existing demos under: $BASE_PROJECT_DIR" >&2
     # get tedge version
     TEDGE_VERSION=$(cd "$PROJECT_DIR" && $DOCKER_CMD compose -f "$COMPOSE_FILE" exec tedge tedge --version 2>/dev/null | cut -d' ' -f2- ||:)
 
-    printf '{"name":"%s","url":"%s","tedgeVersion":"%s"}\n' "$NAME" "${URL:-"-"}" "$TEDGE_VERSION"
+    STATE="stopped"
+    if [ -n "$TEDGE_VERSION" ]; then
+        STATE="running"
+    fi
+    printf '{"name":"%s","state":"%s","url":"%s","tedgeVersion":"%s"}\n' "$NAME" "$STATE" "${URL:-"-"}" "${TEDGE_VERSION:-"-"}"
 done
-) | C8Y_SETTINGS_VIEWS_COLUMNPADDING=20 c8y util show --select name,tedgeVersion,url
+) | C8Y_SETTINGS_VIEWS_COLUMNPADDING=20 c8y util show --select name,state,tedgeVersion,url
