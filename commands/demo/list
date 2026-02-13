@@ -71,6 +71,7 @@ echo "Existing demos under: $BASE_PROJECT_DIR" >&2
     NAME="$(basename "$PROJECT_DIR")"
 
     COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
+    C8Y_URL_FILE="$PROJECT_DIR/c8y.url"
 
     # get tedge config
     CONFIG=$(cd "$PROJECT_DIR" && $DOCKER_CMD compose -f "$COMPOSE_FILE" exec tedge tedge config list 2>/dev/null ||:)
@@ -78,6 +79,12 @@ echo "Existing demos under: $BASE_PROJECT_DIR" >&2
     if [ -z "$URL" ]; then
         URL=$(echo "$CONFIG" | grep c8y.url | head -n1 | cut -d= -f2 | cut -d: -f1)
     fi
+
+    if [ -z "$URL" ] && [ -f "$C8Y_URL_FILE" ]; then
+        # use value from file as the container is not running so the configured value can not be read
+        URL=$(cat "$C8Y_URL_FILE")
+    fi
+
     if [ -n "$URL" ]; then
         URL="https://$URL"
     fi

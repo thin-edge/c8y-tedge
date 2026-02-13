@@ -366,9 +366,14 @@ case "$AUTH_TYPE" in
         ;;
 esac
 
+if [ -z "$C8Y_DOMAIN" ]; then
+    C8Y_DOMAIN=$(c8y currenttenant get -n --select domainName -o csv)
+fi
+
 RUN_OPTIONS=(
     # Add label identify container launched by c8y-tedge
     --label "c8y.tedge.container.bundle=1"
+    --label "c8y.url=$C8Y_DOMAIN"
 )
 
 if [ "$C8Y_TEDGE_CONTAINER_CLI" = docker ]; then
@@ -378,9 +383,6 @@ if [ "$C8Y_TEDGE_CONTAINER_CLI" = docker ]; then
     )
 fi
 
-if [ -z "$C8Y_DOMAIN" ]; then
-    C8Y_DOMAIN=$(c8y currenttenant get -n --select domainName -o csv)
-fi
 
 port() {
     # return a port with a given offset to try

@@ -51,7 +51,23 @@ echo "Using container cli: $C8Y_TEDGE_CONTAINER_CLI" >&2
 
 echo "Existing tedge-container-bundle instances (label=c8y.tedge.container.bundle=1)" >&2
 
-CONTAINER_NAMES=$($C8Y_TEDGE_CONTAINER_CLI container list -a --filter "label=c8y.tedge.container.bundle=1" --format="{{.Names}},{{.State}}" | sed 's|^/||g')
+# jsonnet template to extract container info including the c8y.url which is stored in the label
+JSONNET_TEMPLATE='
+{
+  State: input.value.State,
+  Name: std.strReplace(input.value.Names, "/", ""),
+  url: std.join("," , [
+      std.splitLimit(x,"=",1)[1]
+      for x in std.split(input.value.Labels,",")
+      if std.startsWith(x, "c8y.url=")
+    ]
+  ),
+}
+'
+CONTAINER_NAMES=$(
+    $C8Y_TEDGE_CONTAINER_CLI container list -a --filter "label=c8y.tedge.container.bundle=1" --format='{{. | json}}' \
+    | c8y template execute --template "$JSONNET_TEMPLATE" --output csv --select "Name,State,url"
+)
 
 if [ -z "$CONTAINER_NAMES" ]; then
     echo "No tedge-container-bundles instances exist" >&2
@@ -64,12 +80,16 @@ fi
 
         NAME=$(echo "$CONTAINER_INFO" | cut -d, -f1)
         STATE=$(echo "$CONTAINER_INFO" | cut -d, -f2)
+        URL_FROM_LABEL=$(echo "$CONTAINER_INFO" | cut -d, -f3)
 
         # get tedge config
         CONFIG=$("$C8Y_TEDGE_CONTAINER_CLI" exec "$NAME" tedge config list 2>/dev/null ||:)
         URL=$(echo "$CONFIG" | grep c8y.http | head -n1 | cut -d= -f2 | cut -d: -f1)
         if [ -z "$URL" ]; then
             URL=$(echo "$CONFIG" | grep c8y.url | head -n1 | cut -d= -f2 | cut -d: -f1)
+        fi
+        if [ -z "$URL" ] && [ -n "$URL_FROM_LABEL" ]; then
+            URL="$URL_FROM_LABEL"
         fi
         if [ -n "$URL" ]; then
             URL="https://$URL"

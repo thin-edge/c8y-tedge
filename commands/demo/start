@@ -120,6 +120,7 @@ fi
 COMPOSE_URL="https://raw.githubusercontent.com/thin-edge/tedge-demo-container/main/demos/docker-compose/device/docker-compose.yaml"
 PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"
 export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
+C8Y_URL_FILE="$PROJECT_DIR/c8y.url"
 
 # Just start the project if it already exists
 if [ -f "$COMPOSE_FILE" ]; then
@@ -180,6 +181,11 @@ fi
 
 echo "Bootstrapping" >&2
 c8y tedge bootstrap-container tedge --device-id "$NAME" --skip-website --auth-type "$AUTH_TYPE" "$@"
+
+if [ -n "$C8Y_DOMAIN" ]; then
+    # store the configured c8y.url to file so it can be looked up in the list command (when the container is not running)
+    echo "$C8Y_DOMAIN" > "$C8Y_URL_FILE" ||:
+fi
 
 check_c8y_role() {
     # check if the current user has a given Cumulocity Role
