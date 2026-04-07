@@ -9,6 +9,8 @@ PATTERN="${PATTERN:-.+}"
 C8Y_TEDGE_CONTAINER_CLI="${C8Y_TEDGE_CONTAINER_CLI:-}"
 ONE_TIME_PASSWORD="${ONE_TIME_PASSWORD:-}"
 AUTH_TYPE="${AUTH_TYPE:-}"
+USE_MQTT_SERVICE="${USE_MQTT_SERVICE:-0}"
+CHANNEL="${CHANNEL:-}"
 
 usage() {
     EXAMPLES=$(examples 2>&1)
@@ -35,6 +37,8 @@ FLAGS
   --skip-website              Don't open the Cumulocity IoT Device Management application
   --page <STRING>             Which Device Management page to open. Defaults to device-info
   --auth-type <STRING>        Authorization type, e.g. certificate or basic
+  --mqtt-service              Use the Cumulocity MQTT Service as primary connection
+                              Requires 'c8y features enable --key mqtt-service.smartrest true'
   --verbose                   Enable verbose logging
   --debug                     Enable debug logging
   -h, --help                  Show this help
@@ -105,6 +109,13 @@ while [ $# -gt 0 ]; do
             ;;
         --container-cli)
             C8Y_TEDGE_CONTAINER_CLI="$2"
+            shift
+            ;;
+        --mqtt-service)
+            USE_MQTT_SERVICE=1
+            ;;
+        --channel)
+            CHANNEL="$2"
             shift
             ;;
         --skip-website)
@@ -333,6 +344,66 @@ bootstrap_self_signed() {
     fi
 }
 
+set_url() {
+    #
+    # Set Cumulocity URL
+    #
+    target="$1"
+    url="$2"
+    case "$url" in
+        localhost|127.0.0.1|localhost:8111|127.0.0.1:8111)
+            # Special case for Cumulocity local development, where http and mqtt is used
+            # Prefer using 127.0.0.1 over localhost
+            echo "Setting local ports" >&2
+            "${EXEC_CMD[@]}" "$target" tedge config set c8y.http "127.0.0.1:8111"
+
+            if [ "$USE_MQTT_SERVICE" = 0 ]; then
+                "${EXEC_CMD[@]}" "$target" tedge config set c8y.mqtt "127.0.0.1:1884"
+            else
+                # TODO: is this event supported by the mqtt-service?
+                "${EXEC_CMD[@]}" "$target" tedge config set c8y.mqtt "127.0.0.1:1884"
+            fi
+            ;;
+        *)
+            # TODO: Detect if a custom domain is being used or not
+            mqtt_url=$(curl -s "$url/tenant/loginOptions" | jq -r .self | awk -F / '{print $3}')
+            if [ -n "$mqtt_url" ] && [ "$url" != "$mqtt_url" ]; then
+                echo "Detected custom domain name. c8y.http=$url, c8y.mqtt=$mqtt_url" >&2
+                "${EXEC_CMD[@]}" "$target" tedge config set c8y.http "$url"
+
+                if [ "$USE_MQTT_SERVICE" = 0 ]; then
+                    "${EXEC_CMD[@]}" "$target" tedge config set c8y.mqtt "$mqtt_url"
+                else
+                    "${EXEC_CMD[@]}" "$target" tedge config set c8y.mqtt "${mqtt_url}:9883"
+                fi
+            else
+                if [ "$USE_MQTT_SERVICE" = 0 ]; then
+                    "${EXEC_CMD[@]}" "$target" tedge config set c8y.url "$url"
+                else
+                    "${EXEC_CMD[@]}" "$target" tedge config set c8y.http "$url"
+                    "${EXEC_CMD[@]}" "$target" tedge config set c8y.mqtt "${url}:9883"
+                fi
+            fi
+            ;;
+    esac
+
+    if [ "$USE_MQTT_SERVICE" = 1 ]; then
+        "${EXEC_CMD[@]}" "$target" tedge config set c8y.mqtt_service.enabled true
+    fi
+}
+
+update_tedge() {
+    target="$1"
+    case "$CHANNEL" in
+        main)
+            "${EXEC_CMD[@]}" "$target" sh -c "wget -O - thin-edge.io/install.sh | sh -s -- --channel '$CHANNEL'"
+            ;;
+        *)
+            # the latest official version should already be used
+            ;;
+    esac
+}
+
 do_action() {
     if [ $# -gt 0 ]; then
         TARGET="$1"
@@ -402,7 +473,10 @@ do_action() {
             ;;
     esac
 
-    "${EXEC_CMD[@]}" "$TARGET" tedge config set c8y.url "$URL"
+    # optionally update tedge to a different release channel (e.g. main)
+    update_tedge "$TARGET"
+
+    set_url "$TARGET" "$URL"
 
     case "$AUTH_TYPE" in
         basic)
