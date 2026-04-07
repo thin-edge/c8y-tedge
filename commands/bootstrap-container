@@ -386,6 +386,10 @@ set_url() {
             fi
             ;;
     esac
+
+    if [ "$USE_MQTT_SERVICE" = 1 ]; then
+        "${EXEC_CMD[@]}" "$target" tedge config set c8y.mqtt_service.enabled true
+    fi
 }
 
 update_tedge() {
