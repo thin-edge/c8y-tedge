@@ -181,12 +181,9 @@ container_service_check() {
     if "$C8Y_TEDGE_CONTAINER_CLI" compose ps -a --format '{{.State}}' "$1" >/dev/null 2>/dev/null; then
         # New docker compose ps style
         "$C8Y_TEDGE_CONTAINER_CLI" compose ps -a --format '{{.State}}' "$1"
-    elif command -V jq >/dev/null 2>&1; then
-        # Prefer parsing output with jq if available
-        "$C8Y_TEDGE_CONTAINER_CLI" compose ps -a --format 'json' "$1" | jq -r '.[].State'
     else
-        # Fallback to parsing with sed
-        "$C8Y_TEDGE_CONTAINER_CLI" compose ps -a --format 'json' "$1" | sed 's/.*"State":"\([a-zA-Z0-9]*\)".*/\1/g'
+        # Use c8y for parsing the output
+        "$C8Y_TEDGE_CONTAINER_CLI" compose ps -a --format 'json' "$1" | c8y util show --select State -o csv --allowEmptyPipe=false
     fi
 }
 
@@ -366,7 +363,7 @@ set_url() {
             ;;
         *)
             # TODO: Detect if a custom domain is being used or not
-            mqtt_url=$(curl -s "$url/tenant/loginOptions" | jq -r .self | awk -F / '{print $3}')
+            mqtt_url=$(curl -s "$url/tenant/loginOptions" | c8y util show --select self -o csv | awk -F / '{print $3}')
             if [ -n "$mqtt_url" ] && [ "$url" != "$mqtt_url" ]; then
                 echo "Detected custom domain name. c8y.http=$url, c8y.mqtt=$mqtt_url" >&2
                 "${EXEC_CMD[@]}" "$target" tedge config set c8y.http "$url"
