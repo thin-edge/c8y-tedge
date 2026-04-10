@@ -347,6 +347,11 @@ set_url() {
     #
     target="$1"
     url="$2"
+
+    # Force upgrading of the tedge.toml to individual mapper.toml files
+    # in case there are pre-backed c8y settings already in the tedge.toml file
+    "${EXEC_CMD[@]}" "$target" tedge config upgrade || echo "WARN: failed to upgrade tedge config. Continuing anyway"
+
     case "$url" in
         localhost|127.0.0.1|localhost:8111|127.0.0.1:8111)
             # Special case for Cumulocity local development, where http and mqtt is used
