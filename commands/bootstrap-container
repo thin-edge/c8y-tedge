@@ -317,7 +317,7 @@ bootstrap_self_signed() {
     PUBLIC_CERT=$("${EXEC_CMD[@]}" "$TARGET" /bin/sh -c "cat \$(tedge config get device.cert_path)")
 
     if [ -z "$PUBLIC_CERT" ]; then
-        echo "Failed to get device certifate from $TARGET" >&2
+        echo "Failed to get device certificate from $TARGET" >&2
         exit 1
     fi
 
