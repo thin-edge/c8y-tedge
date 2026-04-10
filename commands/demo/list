@@ -80,6 +80,12 @@ echo "Existing demos under: $BASE_PROJECT_DIR" >&2
         URL=$(echo "$CONFIG" | grep c8y.url | head -n1 | cut -d= -f2 | cut -d: -f1)
     fi
 
+    # check if it is using the Cumulocity MQTT service (based on the port number)
+    USING_MQTT_SERVICE="false"
+    if echo "$CONFIG" | grep c8y.mqtt | grep -q 9883; then
+        USING_MQTT_SERVICE="true"
+    fi
+
     if [ -z "$URL" ] && [ -f "$C8Y_URL_FILE" ]; then
         # use value from file as the container is not running so the configured value can not be read
         URL=$(cat "$C8Y_URL_FILE")
@@ -96,6 +102,6 @@ echo "Existing demos under: $BASE_PROJECT_DIR" >&2
     if [ -n "$TEDGE_VERSION" ]; then
         STATE="running"
     fi
-    printf '{"name":"%s","state":"%s","url":"%s","tedgeVersion":"%s"}\n' "$NAME" "$STATE" "${URL:-"-"}" "${TEDGE_VERSION:-"-"}"
+    printf '{"name":"%s","state":"%s","url":"%s","tedgeVersion":"%s","mqttService":%s}\n' "$NAME" "$STATE" "${URL:-"-"}" "${TEDGE_VERSION:-"-"}" "${USING_MQTT_SERVICE:-false}"
 done
-) | C8Y_SETTINGS_VIEWS_COLUMNPADDING=20 c8y util show --select name,state,tedgeVersion,url
+) | C8Y_SETTINGS_VIEWS_COLUMNPADDING=20 c8y util show --select name,state,tedgeVersion,url,mqttService
