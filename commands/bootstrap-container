@@ -409,6 +409,26 @@ do_action() {
         TARGET="$1"
     fi
 
+    # If user opted in for the mqtt service, check if smartrest bridge is enabled and try to enable it if possible
+    if [ "$USE_MQTT_SERVICE" = 1 ]; then
+        IS_SMARTREST_BRIDGE_ENABLED=$(c8y features get -n --key mqtt-service.smartrest --select active -o csv ||:)
+        case "$IS_SMARTREST_BRIDGE_ENABLED" in
+            true)
+                echo "Cumulocity feature 'mqtt-service.smartrest' is already enabled" >&2
+                ;;
+            false)
+                if ! c8y features enable -n --key mqtt-service.smartrest --force; then
+                    echo "WARN: Cumulocity feature 'mqtt-service.smartrest' could not be enabled for some reason. Check if your user is in the 'Tenant Manager' group and try again" >&2
+                    exit 1
+                fi
+                ;;
+            *)
+                echo "WARN: Failed to check if the Cumulocity feature 'mqtt-service.smartrest' was enabled or not. Are you logged in?" >&2
+                exit 1
+                ;;
+        esac
+    fi
+
     # Default to container cli
     EXEC_CMD=(
         "$C8Y_TEDGE_CONTAINER_CLI"
