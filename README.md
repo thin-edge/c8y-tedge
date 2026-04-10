@@ -50,6 +50,9 @@ Or you can specify the auth-type you want to use (e.g. certificate (default) or 
 c8y tedge demo start tedge0001 --auth-type basic
 
 c8y tedge demo start tedge0001 --auth-type certificate
+
+# Connect to Cumulocity using the MQTT Service (e.g. port 9883)
+c8y tedge demo start tedge0001 --mqtt-service
 ```
 
 ### Stop/Delete a demo container
