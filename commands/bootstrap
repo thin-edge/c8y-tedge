@@ -421,7 +421,7 @@ create_self_signed() {
     PUBLIC_CERT=$("${EXEC_CMD[@]}" "$TARGET" cat "\$(tedge config get device.cert_path)")
 
     if [ -z "$PUBLIC_CERT" ]; then
-        echo "Failed to get device certifate from $TARGET" >&2
+        echo "Failed to get device certificate from $TARGET" >&2
         exit 1
     fi
 
@@ -657,7 +657,7 @@ EOF
     esac
 }
 
-# configure tegde-agent on the main device
+# configure tedge-agent on the main device
 configure_mtls_main_agent() {
     TARGET_IP="$1"
     TARGET_DNS="$2"
