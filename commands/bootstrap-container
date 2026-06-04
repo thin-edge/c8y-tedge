@@ -576,8 +576,12 @@ case "$AUTH_TYPE" in
     certificate|basic)
         ;;
     *)
+        if [ -n "$AUTH_TYPE" ]; then
+            # warn for unknown options
+            echo "Unknown auth-type option ($AUTH_TYPE). Defaulting to 'certificate'. Allowed values: [certificate, basic]" >&2
+        fi
+        # set default value
         AUTH_TYPE="certificate"
-        echo "Unknown auth-type option ($AUTH_TYPE). Defaulting to 'certificate'. Allowed values: [certificate, basic]" >&2
         ;;
 esac
 
