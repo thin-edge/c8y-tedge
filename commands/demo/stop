@@ -66,6 +66,10 @@ if ! docker info >/dev/null 2>&1; then
     fi
 fi
 
+if ! $DOCKER_CMD compose --help >/dev/null 2>&1; then
+    fail "Missing dependency. docker compose is not installed. Please install it and try again"
+fi
+
 PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"
 export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
 

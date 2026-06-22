@@ -127,6 +127,10 @@ PROJECT_DIR="$HOME/.tedge/tedge-demo-container/$NAME"
 export COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
 C8Y_URL_FILE="$PROJECT_DIR/c8y.url"
 
+if ! $DOCKER_CMD compose --help >/dev/null 2>&1; then
+    fail "Missing dependency. docker compose is not installed. Please install it and try again"
+fi
+
 # Just start the project if it already exists
 if [ -f "$COMPOSE_FILE" ]; then
     echo "Project already exists: path=$PROJECT_DIR" >&2
