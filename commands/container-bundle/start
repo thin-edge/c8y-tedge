@@ -209,6 +209,7 @@ register_with_c8y_ca() {
     BOOTSTRAP_OPTIONS+=(
         -e "CA=c8y"
         -e "DEVICE_ONE_TIME_PASSWORD=${DEVICE_ONE_TIME_PASSWORD}"
+        -v "${VOLUME_CREDENTIALS}:/etc/tedge/device-certs"
     )
 }
 
