@@ -100,6 +100,9 @@ c8y tedge container-bundle start tedge12345 --no-ports
 
 # Start and publish ports to randomly assigned ports on the host
 c8y tedge container-bundle start tedge12345 --publish-all
+
+# Start using the image built from the main branch (tedge-container-bundle-main)
+c8y tedge container-bundle start tedge12345 --channel main
 ```
 
 Then you can list and then stop the instances using (note: only the instances which were started with the c8y-tedge extension will be shown)
