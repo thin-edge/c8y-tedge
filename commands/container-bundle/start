@@ -7,7 +7,8 @@ AUTH_TYPE="${AUTH_TYPE:-certificate}"
 DEVICE_ONE_TIME_PASSWORD="${DEVICE_ONE_TIME_PASSWORD:-}"
 C8Y_DEVICE_PASSWORD="${C8Y_DEVICE_PASSWORD:-}"
 CA=${CA:-}
-IMAGE=${IMAGE:-"ghcr.io/thin-edge/tedge-container-bundle:latest"}
+IMAGE=${IMAGE:-}
+CHANNEL=${C8Y_TEDGE_CHANNEL:-release}
 PUBLISH_ALL=${PUBLISH_ALL:-0}
 STANDARD_PORTS=${STANDARD_PORTS:-1}
 PORT_OFFSET=0
@@ -34,7 +35,10 @@ c8y tedge container-bundle start [DEVICE_NAME] [--auth-type <certificate|basic>]
 Arguments
   --auth-type <certificate|basic>  Authorization type to use when connection to Cumulocity. Allowed values:  certificate, basic
                                    Defaults to 'certificate'
-  --image <container_image>        Container image to pull and use. Defaults to 'ghcr.io/thin-edge/tedge-container-bundle:latest'
+  --channel <release|main>         Release channel of the image to use. Defaults to $C8Y_TEDGE_CHANNEL or 'release'
+                                     release: ghcr.io/thin-edge/tedge-container-bundle:latest (official releases)
+                                     main:    ghcr.io/thin-edge/tedge-container-bundle-main:latest (built from the main branch)
+  --image <container_image>        Container image to pull and use. Takes precedence over --channel
   --ca <c8y|self-signed>           Certificate authority to generate the device certificate (when auth-type is set to certificate).
                                    The 'ca' option requires the Cumulocity Certificate Authority feature to be enabled in the tenant
   --one-time-password <value>      One-time password to enrol the device using the Cumulocity Certificate Authority feature
@@ -70,6 +74,9 @@ Examples
   c8y tedge container-bundle start --publish-all
   # Start a container and publish all ports but map to randomly assigned host ports
 
+  c8y tedge container-bundle start mydevice001 --channel main
+  # Start a container using the latest image built from the main branch (e.g. to try unreleased features)
+
   c8y tedge container-bundle start --port-offset 10
   # Start a container and publish ports but offset them by 100, e.g. 1883 => 1893, 8000 => 8010, 8001 => 8011
 EOT
@@ -90,6 +97,10 @@ while [ $# -gt 0 ]; do
             ;;
         --image)
             IMAGE="$2"
+            shift
+            ;;
+        --channel)
+            CHANNEL="$2"
             shift
             ;;
         --ca)
@@ -142,6 +153,21 @@ else
     DEVICE_ID=$(c8y template execute --template "'tedge_' + _.Hex(8)")
     echo "Using randomly generated device name: $DEVICE_ID" >&2
 fi
+
+if [ -z "$IMAGE" ]; then
+    case "$CHANNEL" in
+        release)
+            IMAGE="ghcr.io/thin-edge/tedge-container-bundle:latest"
+            ;;
+        main)
+            IMAGE="ghcr.io/thin-edge/tedge-container-bundle-main:latest"
+            ;;
+        *)
+            fail "Invalid channel: '$CHANNEL'. Allowed values: release, main"
+            ;;
+    esac
+fi
+echo "Using image: $IMAGE" >&2
 
 # Try auto detecting container cli (based on what is available)
 if [ -z "$C8Y_TEDGE_CONTAINER_CLI" ]; then
