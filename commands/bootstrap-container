@@ -525,28 +525,35 @@ do_action() {
 
     
 
-    # Wait for certificate to be enabled
-    if ! "${EXEC_CMD[@]}" "$TARGET" tedge connect c8y --test >/dev/null 2>&1; then
-        sleep 2
-
-        attempt=0
-        max_attempts=10
-        success=0
-        while [ "$attempt" -lt "$max_attempts" ]; do
-            if "${EXEC_CMD[@]}" "$TARGET" tedge connect c8y; then
-                success=1
-                break
-            fi
-
-            echo "Connection failed. Trying again in 5 seconds" >&2
-            sleep 5
-        done
-
-        if [ "$success" = "1" ]; then
-            echo "Successfully bootstrapped device" >&2
-        else
-            echo "Bootstrapping failed. Please check the console output for more details" >&2
+    # Always run 'tedge connect', as it is what enables mosquitto, tedge-agent and the mapper.
+    # 'tedge connect c8y --test' can pass without it, e.g. when a first-boot script already
+    # started the services, and they would then not be started again after a reboot.
+    # 'tedge connect' refuses to run on an existing connection, which counts as success.
+    attempt=0
+    max_attempts=10
+    success=0
+    while [ "$attempt" -lt "$max_attempts" ]; do
+        attempt=$((attempt + 1))
+        if output=$("${EXEC_CMD[@]}" "$TARGET" tedge connect c8y 2>&1); then
+            echo "$output" >&2
+            success=1
+            break
         fi
+        echo "$output" >&2
+
+        if echo "$output" | grep -q "Connection is already established"; then
+            success=1
+            break
+        fi
+
+        echo "Connection failed. Trying again in 5 seconds (attempt $attempt of $max_attempts)" >&2
+        sleep 5
+    done
+
+    if [ "$success" = "1" ]; then
+        echo "Successfully bootstrapped device" >&2
+    else
+        echo "Bootstrapping failed. Please check the console output for more details" >&2
     fi
 
     # Open device management page for the device
