@@ -367,9 +367,14 @@ set_url() {
             fi
             ;;
         *)
-            # TODO: Detect if a custom domain is being used or not
+            # Detect if a custom domain is being used or not.
+            # The loginOptions self link always points to the tenant's default domain (e.g. t12345.<instance-domain>),
+            # so only treat the url as a custom domain if it does not belong to the same instance domain,
+            # e.g. "mytenant.eu-latest.cumulocity.com" and "t12345.eu-latest.cumulocity.com" are on the same instance
             mqtt_url=$(curl -s "$url/tenant/loginOptions" | c8y util show --select self -o csv | awk -F / '{print $3}')
-            if [ -n "$mqtt_url" ] && [ "$url" != "$mqtt_url" ]; then
+            url_parent_domain="${url#*.}"
+            mqtt_parent_domain="${mqtt_url#*.}"
+            if [ -n "$mqtt_url" ] && [ "$url" != "$mqtt_url" ] && [ "$url_parent_domain" != "$mqtt_parent_domain" ]; then
                 echo "Detected custom domain name. c8y.http=$url, c8y.mqtt=$mqtt_url" >&2
                 "${EXEC_CMD[@]}" "$target" tedge config set c8y.http "$url"
 
