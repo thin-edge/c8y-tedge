@@ -525,23 +525,16 @@ do_action() {
 
     
 
-    # Always run 'tedge connect', as it is what enables mosquitto, tedge-agent and the mapper.
+    # Use 'tedge reconnect' as only (re)connecting enables mosquitto, tedge-agent and the mapper.
     # 'tedge connect c8y --test' can pass without it, e.g. when a first-boot script already
     # started the services, and they would then not be started again after a reboot.
-    # 'tedge connect' refuses to run on an existing connection, which counts as success.
+    # 'tedge reconnect' also works when there is no connection yet (tedge >= 1.4.0).
     attempt=0
     max_attempts=10
     success=0
     while [ "$attempt" -lt "$max_attempts" ]; do
         attempt=$((attempt + 1))
-        if output=$("${EXEC_CMD[@]}" "$TARGET" tedge connect c8y 2>&1); then
-            echo "$output" >&2
-            success=1
-            break
-        fi
-        echo "$output" >&2
-
-        if echo "$output" | grep -q "Connection is already established"; then
+        if "${EXEC_CMD[@]}" "$TARGET" tedge reconnect c8y; then
             success=1
             break
         fi
