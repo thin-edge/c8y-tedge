@@ -93,7 +93,9 @@ scan_tedge() {
         # new dns-sd type (which is compatible with systemd-resolved)
         case "$FORMAT" in
             dns-sd)
-                DEVICES=$(echo "$OUTPUT" | awk '{print $7".local"}' | sort | uniq)
+                # Only parse result rows (e.g. "15:04:28.469  Add  2  14 local.  _tedge._tcp.  <name>")
+                # to avoid producing a bare ".local" when no devices respond (empty output)
+                DEVICES=$(echo "$OUTPUT" | awk '$2 == "Add" && NF >= 7 {print $7".local"}' | sort | uniq)
                 ;;
             avahi-browse)
                 # TODO: avahi-browser output is not yet known
