@@ -560,7 +560,9 @@ do_action() {
 
 DEVICES=()
 
-if [ ! -t 0 ] && [ -z "$CI" ]; then
+# Don't read stdin when c8y was called with -n/--nullInput (e.g. by the c8y MCP server),
+# as stdin is not a terminal, but no devices are piped to the command either
+if [ ! -t 0 ] && [ -z "$CI" ] && [ "$C8Y_EXTENSION_NULL_INPUT" != "true" ]; then
     echo "Reading from pipeline" >&2
     while IFS= read -r device; do
         if [ -n "$device" ] && [[ "${device}" =~ $PATTERN ]]; then
